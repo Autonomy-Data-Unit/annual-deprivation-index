@@ -11,7 +11,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-16T16:33:39.29075Z"
+exclude-newer = "2026-04-16T18:02:52.898567Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -47,7 +47,6 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "python-dotenv" },
-    { name = "requests" },
     { name = "scipy" },
     { name = "shapely" },
     { name = "xlrd" },
@@ -75,7 +74,6 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.0" },
     { name = "pyarrow", specifier = ">=10.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "requests", specifier = ">=2.31" },
     { name = "scipy", specifier = ">=1.12" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "xlrd", specifier = ">=2.0" },

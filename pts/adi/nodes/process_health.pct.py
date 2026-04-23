@@ -177,39 +177,40 @@ def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame) -> pd.Da
     """Estimate LSOA-level prevalence from QOF + GP-LSOA registration data.
 
     For each LSOA i and GP practice k:
-        weight_ik = patients_from_LSOA_i_at_GP_k / total_patients_at_GP_k
+        weight_ik = patients_from_LSOA_i_at_GP_k / total_patients_from_LSOA_i
         LSOA_i_prevalence = sum_k(weight_ik * GP_k_register / GP_k_list_pop)
+
+    Weights sum to 1.0 per LSOA, so the result is a proper weighted average
+    of practice-level prevalence rates.
     """
     disease_cols = [c for c in qof.columns if c not in ("practice_code", "list_pop")]
 
-    # Compute total patients per practice from GP-LSOA data
-    practice_totals = gp_lsoa.groupby("practice_code")["patients"].sum().rename("total_patients")
+    # Compute total patients per LSOA (for normalising weights)
+    lsoa_totals = gp_lsoa.groupby("lsoa_code")["patients"].sum().rename("lsoa_total_patients")
 
     # Join GP-LSOA with QOF data
     merged = gp_lsoa.merge(qof, on="practice_code", how="inner")
-    merged = merged.merge(practice_totals, on="practice_code", how="inner")
+    merged = merged.merge(lsoa_totals, on="lsoa_code", how="inner")
 
-    # Weight = patients from this LSOA / total patients at this practice
-    merged["weight"] = merged["patients"] / merged["total_patients"]
+    # Weight = fraction of this LSOA's patients at this GP (sums to 1.0 per LSOA)
+    merged["weight"] = merged["patients"] / merged["lsoa_total_patients"]
 
-    # For each disease, compute weighted prevalence rate at LSOA level
-    result_rows = {}
+    # Compute practice-level prevalence rates for all diseases at once
+    list_pop_safe = merged["list_pop"].replace(0, np.nan)
     for disease in disease_cols:
-        # practice-level prevalence rate
-        merged[f"_prev_{disease}"] = merged[disease] / merged["list_pop"].replace(0, np.nan)
-        # LSOA-level weighted average
-        weighted = merged.groupby("lsoa_code").apply(
-            lambda g: (g["weight"] * g[f"_prev_{disease}"]).sum(),
-            include_groups=False,
-        )
-        result_rows[f"{disease}_prevalence_rate"] = weighted
+        merged[f"_wprev_{disease}"] = merged["weight"] * (merged[disease] / list_pop_safe)
 
-    # Also compute weighted list_pop and afflicted counts
+    # Aggregate to LSOA level in a single groupby
+    wprev_cols = [f"_wprev_{d}" for d in disease_cols]
     merged["_weighted_list_pop"] = merged["weight"] * merged["list_pop"]
-    lsoa_list_pop = merged.groupby("lsoa_code")["_weighted_list_pop"].sum()
+    agg_cols = wprev_cols + ["_weighted_list_pop"]
+    lsoa_agg = merged.groupby("lsoa_code")[agg_cols].sum()
 
-    result = pd.DataFrame(result_rows)
-    result["list_pop"] = lsoa_list_pop
+    # Build result DataFrame
+    result = pd.DataFrame(index=lsoa_agg.index)
+    for disease in disease_cols:
+        result[f"{disease}_prevalence_rate"] = lsoa_agg[f"_wprev_{disease}"]
+    result["list_pop"] = lsoa_agg["_weighted_list_pop"]
     result.index.name = "LSOA11CD"
     result = result.reset_index().rename(columns={"lsoa_code": "LSOA11CD"})
 

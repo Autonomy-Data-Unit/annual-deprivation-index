@@ -5,39 +5,8 @@
 #
 # The parser reads the config for a given year, applies the column mapping,
 # pivots from long to wide format, and outputs the standardised schema.
-
-# --- Pre-2013: Excel format with different disease codes ---
-# These years use .xls/.xlsx files with different disease group codes
-# (e.g. MENT instead of MH, DEP1, CVD-PP, HFLVD).
-# They may need per-year handling beyond this config.
-
-[years.2006_07]
-format = "excel"
-notes = "Pre-2013 Excel format; disease codes differ (MENT, DEP1, CVD-PP, HFLVD)"
-
-[years.2007_08]
-format = "excel"
-notes = "Pre-2013 Excel format"
-
-[years.2008_09]
-format = "excel"
-notes = "Pre-2013 Excel format"
-
-[years.2009_10]
-format = "excel"
-notes = "Pre-2013 Excel format"
-
-[years.2010_11]
-format = "excel"
-notes = "Pre-2013 Excel format"
-
-[years.2011_12]
-format = "excel"
-notes = "Pre-2013 Excel format"
-
-[years.2012_13]
-format = "excel"
-notes = "Pre-2013 Excel format"
+#
+# file_pattern is relative to store/inputs/qof/raw/{year_key}/
 
 # --- Era 1: 2013-14 ---
 [years.2013_14]
@@ -47,7 +16,7 @@ register_col = "disease_register_size"
 list_pop_col = "practice_listsize"
 disease_code_col = "indicator_group"
 encoding = "utf-8"
-file_pattern = "PREVALENCE_1314.csv"
+file_pattern = "prevalencebyprac.csv"
 notes = "Duplicate HF rows per practice; extra groups SMOK, THY (24 total)"
 
 # --- Era 2: 2014-15 ---
@@ -58,7 +27,7 @@ register_col = "REGISTER_SIZE"
 list_pop_col = "PRACTICE_LIST_SIZE"
 disease_code_col = "INDICATOR_GROUP_CODE"
 encoding = "cp1252"
-file_pattern = "PREVALENCE_1415.csv"
+file_pattern = "PREVALENCE_BY_PRAC_v2.csv"
 notes = "Windows cp1252 encoding; has PRACTICE_NAME column"
 
 # --- Era 3: 2015-16 through 2019-20 ---
@@ -69,7 +38,7 @@ register_col = "REGISTER"
 list_pop_col = "PATIENT_LIST_SIZE"
 disease_code_col = "INDICATOR_GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "PREVALENCE_1516.csv"
+file_pattern = "PREVALENCE.csv"
 
 [years.2016_17]
 format = "csv"
@@ -78,7 +47,7 @@ register_col = "REGISTER"
 list_pop_col = "PATIENT_LIST_SIZE"
 disease_code_col = "INDICATOR_GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "PREVALENCE_1617.csv"
+file_pattern = "PREVALENCE.csv"
 
 [years.2017_18]
 format = "csv"
@@ -87,7 +56,7 @@ register_col = "REGISTER"
 list_pop_col = "PATIENT_LIST_SIZE"
 disease_code_col = "INDICATOR_GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "PREVALENCE_1718.csv"
+file_pattern = "PREVALENCE.csv"
 
 [years.2018_19]
 format = "csv"
@@ -96,7 +65,7 @@ register_col = "REGISTER"
 list_pop_col = "PATIENT_LIST_SIZE"
 disease_code_col = "INDICATOR_GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "PREVALENCE_1819.csv"
+file_pattern = "PREVALENCE_1819_v2.csv"
 
 [years.2019_20]
 format = "csv"
@@ -116,7 +85,7 @@ register_col = "REGISTER"
 list_pop_col = "PRACTICE_LIST_SIZE"
 disease_code_col = "GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "QOF2021_v2/PREVALENCE_2021_v2.csv"
+file_pattern = "PREVALENCE_2021_v2.csv"
 list_type_filter = "TOTAL"
 notes = "PRACTICE_LIST_SIZE (not PATIENT_); multiple PATIENT_LIST_TYPE per practice; CVDPP removed, NDH added"
 
@@ -127,9 +96,8 @@ register_col = "REGISTER"
 list_pop_col = "PRACTICE_LIST_SIZE"
 disease_code_col = "GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "QOF_2122_V2/PREVALENCE_2122_V2.csv"
+file_pattern = "PREVALENCE_2122_V2.csv"
 list_type_filter = "TOTAL"
-notes = "Same as 2020-21; REGISTER values are floats"
 
 [years.2022_23]
 format = "csv"
@@ -138,9 +106,8 @@ register_col = "REGISTER"
 list_pop_col = "PRACTICE_LIST_SIZE"
 disease_code_col = "GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "QOF_2223/PREVALENCE_2223.csv"
+file_pattern = "PREVALENCE_2223.csv"
 list_type_filter = "TOTAL"
-notes = "Assumed same schema as 2021-22; verify on download"
 
 [years.2023_24]
 format = "csv"
@@ -149,9 +116,8 @@ register_col = "REGISTER"
 list_pop_col = "PRACTICE_LIST_SIZE"
 disease_code_col = "GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "QOF_2324/PREVALENCE_2324.csv"
+file_pattern = "PREVALENCE_2324.csv"
 list_type_filter = "TOTAL"
-notes = "Assumed same schema as 2021-22; verify on download"
 
 [years.2024_25]
 format = "csv"
@@ -160,6 +126,5 @@ register_col = "REGISTER"
 list_pop_col = "PRACTICE_LIST_SIZE"
 disease_code_col = "GROUP_CODE"
 encoding = "utf-8"
-file_pattern = "QOF2425/PREVALENCE_2425.csv"
+file_pattern = "PREVALENCE_2425.csv"
 list_type_filter = "TOTAL"
-notes = "Assumed same schema as 2021-22; verify on download"
