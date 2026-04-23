@@ -32,7 +32,7 @@ from adi import const
 
 # %%
 #|set_func_signature
-async def main(ctx, print, data_ready: bool):
+async def main(ctx, print, data_ready: dict) -> bool:
     """Process QOF + GP catchment data into per-LSOA health prevalence estimates."""
     ...
 
@@ -70,3 +70,4 @@ print(f"process_health: years {year_start}-{year_end}, LSOA vintage {lsoa_vintag
 # - Temporal interpolation for missing years/subdomains
 
 print(f"process_health: done, output at {const.rel(output_dir)}")
+True  #|func_return_line

@@ -2,7 +2,7 @@
 
 from adi import const
 
-async def main(ctx, print, data_ready: bool):
+async def main(ctx, print, data_ready: dict) -> bool:
     """Process QOF + GP catchment data into per-LSOA health prevalence estimates."""
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]
@@ -23,3 +23,4 @@ async def main(ctx, print, data_ready: bool):
     # - Temporal interpolation for missing years/subdomains
     
     print(f"process_health: done, output at {const.rel(output_dir)}")
+    return True

@@ -29,7 +29,7 @@ from adi import const
 
 # %%
 #|set_func_signature
-async def main(ctx, print, data_ready: bool):
+async def main(ctx, print, data_ready: dict) -> bool:
     """Process raw claimant count data into per-LSOA annual rates."""
     ...
 
@@ -60,3 +60,4 @@ print(f"process_claimant_counts: years {year_start}-{year_end}")
 # TODO: Implement claimant count processing
 
 print(f"process_claimant_counts: done, output at {const.rel(output_dir)}")
+True  #|func_return_line

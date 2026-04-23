@@ -2,7 +2,7 @@
 
 from adi import const
 
-async def main(ctx, print, data_ready: bool):
+async def main(ctx, print, data_ready: dict) -> bool:
     """Process raw claimant count data into per-LSOA annual rates."""
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]
@@ -16,3 +16,4 @@ async def main(ctx, print, data_ready: bool):
     # TODO: Implement claimant count processing
     
     print(f"process_claimant_counts: done, output at {const.rel(output_dir)}")
+    return True

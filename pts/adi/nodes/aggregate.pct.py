@@ -30,7 +30,7 @@ from adi import const
 
 # %%
 #|set_func_signature
-async def main(ctx, print, domains_ready: dict):
+async def main(ctx, print, domains_ready: dict) -> bool:
     """Apply LSOA crosswalk and aggregate to LAD/Region/England."""
     ...
 
@@ -66,3 +66,4 @@ print(f"aggregate: years {year_start}-{year_end}, target vintage LSOA {lsoa_vint
 # - Save outputs
 
 print(f"aggregate: done, output at {const.rel(output_dir)}")
+True  #|func_return_line

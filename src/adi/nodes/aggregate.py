@@ -2,7 +2,7 @@
 
 from adi import const
 
-async def main(ctx, print, domains_ready: dict):
+async def main(ctx, print, domains_ready: dict) -> bool:
     """Apply LSOA crosswalk and aggregate to LAD/Region/England."""
     run_name = ctx.vars["run_name"]
     lsoa_vintage = ctx.vars["lsoa_vintage"]
@@ -21,3 +21,4 @@ async def main(ctx, print, domains_ready: dict):
     # - Save outputs
     
     print(f"aggregate: done, output at {const.rel(output_dir)}")
+    return True

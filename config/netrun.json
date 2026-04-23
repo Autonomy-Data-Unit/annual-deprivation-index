@@ -18,23 +18,114 @@
   "graph": {
     "nodes": [
       {
-        "name": "fetch_data",
-        "description": "Download and cache all raw data sources.",
+        "name": "fetch_populations",
+        "description": "Download LSOA mid-year population estimates from Nomis.",
         "execution_config": {
           "run_on_init": true
         },
         "extra": {
-          "source_path": "src/adi/nodes/fetch_data.py"
+          "source_path": "src/adi/nodes/fetch_populations.py"
         },
         "factory": "netrun.node_factories.from_function",
         "factory_args": {
-          "func": "adi.nodes.fetch_data.main"
+          "func": "adi.nodes.fetch_populations.main"
         },
         "type": "node"
       },
       {
-        "name": "broadcast_data_ready",
-        "description": "Fan-out from fetch_data to processing nodes.",
+        "name": "fetch_claimant_counts",
+        "description": "Download Universal Credit claimant count data from Nomis.",
+        "execution_config": {
+          "run_on_init": true
+        },
+        "extra": {
+          "source_path": "src/adi/nodes/fetch_claimant_counts.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.fetch_claimant_counts.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "fetch_crime",
+        "description": "Download street crime archives from data.police.uk.",
+        "execution_config": {
+          "run_on_init": true
+        },
+        "extra": {
+          "source_path": "src/adi/nodes/fetch_crime.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.fetch_crime.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "fetch_qof",
+        "description": "Download QOF prevalence data from NHS Digital.",
+        "execution_config": {
+          "run_on_init": true
+        },
+        "extra": {
+          "source_path": "src/adi/nodes/fetch_qof.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.fetch_qof.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "fetch_gp_catchments",
+        "description": "Download GP catchment area geodata from NHS Digital.",
+        "execution_config": {
+          "run_on_init": true
+        },
+        "extra": {
+          "source_path": "src/adi/nodes/fetch_gp_catchments.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.fetch_gp_catchments.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "fetch_geo",
+        "description": "Download LSOA boundaries, lookup tables, and crosswalk data from ONS.",
+        "execution_config": {
+          "run_on_init": true
+        },
+        "extra": {
+          "source_path": "src/adi/nodes/fetch_geo.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.fetch_geo.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "join_fetch",
+        "description": "Wait for all fetch nodes to complete.",
+        "factory": "netrun.node_factories.join",
+        "factory_args": {
+          "ports": [
+            "populations",
+            "claimant_counts",
+            "crime",
+            "qof",
+            "gp_catchments",
+            "geo"
+          ]
+        },
+        "type": "node"
+      },
+      {
+        "name": "broadcast_ready",
+        "description": "Fan-out to processing nodes.",
         "factory": "netrun.node_factories.broadcast",
         "factory_args": {
           "num_outputs": 3
@@ -79,7 +170,7 @@
       },
       {
         "name": "join_domains",
-        "description": "Synchronisation barrier: wait for all three domain processors.",
+        "description": "Wait for all domain processors to complete.",
         "factory": "netrun.node_factories.join",
         "factory_args": {
           "ports": [
@@ -105,25 +196,61 @@
     ],
     "edges": [
       {
-        "source_node": "fetch_data",
+        "source_node": "fetch_populations",
         "source_port": "out",
-        "target_node": "broadcast_data_ready",
+        "target_node": "join_fetch",
+        "target_port": "populations"
+      },
+      {
+        "source_node": "fetch_claimant_counts",
+        "source_port": "out",
+        "target_node": "join_fetch",
+        "target_port": "claimant_counts"
+      },
+      {
+        "source_node": "fetch_crime",
+        "source_port": "out",
+        "target_node": "join_fetch",
+        "target_port": "crime"
+      },
+      {
+        "source_node": "fetch_qof",
+        "source_port": "out",
+        "target_node": "join_fetch",
+        "target_port": "qof"
+      },
+      {
+        "source_node": "fetch_gp_catchments",
+        "source_port": "out",
+        "target_node": "join_fetch",
+        "target_port": "gp_catchments"
+      },
+      {
+        "source_node": "fetch_geo",
+        "source_port": "out",
+        "target_node": "join_fetch",
+        "target_port": "geo"
+      },
+      {
+        "source_node": "join_fetch",
+        "source_port": "out",
+        "target_node": "broadcast_ready",
         "target_port": "in_0"
       },
       {
-        "source_node": "broadcast_data_ready",
+        "source_node": "broadcast_ready",
         "source_port": "out_0",
         "target_node": "process_claimant_counts",
         "target_port": "data_ready"
       },
       {
-        "source_node": "broadcast_data_ready",
+        "source_node": "broadcast_ready",
         "source_port": "out_1",
         "target_node": "process_crime",
         "target_port": "data_ready"
       },
       {
-        "source_node": "broadcast_data_ready",
+        "source_node": "broadcast_ready",
         "source_port": "out_2",
         "target_node": "process_health",
         "target_port": "data_ready"

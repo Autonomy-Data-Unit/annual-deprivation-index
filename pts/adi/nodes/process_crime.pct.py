@@ -30,7 +30,7 @@ from adi import const
 
 # %%
 #|set_func_signature
-async def main(ctx, print, data_ready: bool):
+async def main(ctx, print, data_ready: dict) -> bool:
     """Process raw street crime data into per-LSOA annual rates."""
     ...
 
@@ -61,3 +61,4 @@ print(f"process_crime: years {year_start}-{year_end}")
 # TODO: Implement crime data processing
 
 print(f"process_crime: done, output at {const.rel(output_dir)}")
+True  #|func_return_line

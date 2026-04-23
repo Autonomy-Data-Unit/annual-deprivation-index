@@ -1,63 +1,224 @@
 """ONS Open Geography Portal ArcGIS REST API client.
 
 No authentication required. Paginate at 2,000 records per request.
-
-Key services:
-- LSOA 2021 boundaries (BGC): Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BGC_V5
-- LSOA 2011 boundaries (BGC): LSOA_Dec_2011_Boundaries_Generalised_Clipped_BGC_EW_V3
-- LSOA 2021 to LAD lookup: LSOA21_WD25_LAD25_EW_LU_v2
-- LSOA exact-fit crosswalk: LSOA11_LSOA21_LAD22_EW_LU_v5
-- OA exact-fit crosswalk: OA11_OA21_LAD22_EW_LU_Exact_fit_V3
-- OA to LSOA 2021: OA_LSOA_MSOA_EW_DEC_2021_LU_v3
 """
 
+import json
+from pathlib import Path
+
+import httpx
 import pandas as pd
 import geopandas as gpd
+from shapely.geometry import shape
 
 ARCGIS_BASE = "https://services1.arcgis.com/ESMARspQHYMw9BZ9/arcgis/rest/services"
+PAGE_SIZE = 2000
+
+# Service names for key datasets
+LSOA_BOUNDARY_SERVICES = {
+    "2021": "Lower_layer_Super_Output_Areas_December_2021_Boundaries_EW_BGC_V5",
+    "2011": "LSOA_Dec_2011_Boundaries_Generalised_Clipped_BGC_EW_V3",
+}
+LSOA_TO_LAD_SERVICE = "LSOA21_WD25_LAD25_EW_LU_v2"
+LAD_TO_RGN_SERVICE = "LAD25_RGN25_EN_LU_v2"
+LSOA_CROSSWALK_SERVICE = "LSOA11_LSOA21_LAD22_EW_LU_v5"
+OA_CROSSWALK_SERVICE = "OA11_OA21_LAD22_EW_LU_Exact_fit_V3"
+OA_TO_LSOA21_SERVICE = "OA_LSOA_MSOA_EW_DEC_2021_LU_v3"
 
 
-async def fetch_arcgis_features(
+async def fetch_arcgis_records(
     service_name: str,
     out_fields: str = "*",
-    out_sr: int = 4326,
-    batch_size: int = 2000,
+    where: str = "1=1",
     return_geometry: bool = False,
-) -> pd.DataFrame | gpd.GeoDataFrame:
-    """Generic paginated ArcGIS REST API query.
+    out_sr: int = 4326,
+    print=print,
+) -> list[dict]:
+    """Paginated ArcGIS REST API query returning raw feature records.
 
     Args:
-        service_name: Name of the ArcGIS FeatureServer service.
-        out_fields: Comma-separated field names, or "*" for all.
-        out_sr: Output spatial reference (4326 = WGS84).
-        batch_size: Records per page (max ~2000).
-        return_geometry: If True, return GeoDataFrame with geometries.
+        service_name: ArcGIS FeatureServer service name.
+        out_fields: Comma-separated field names or "*".
+        where: SQL where clause.
+        return_geometry: Whether to include geometry.
+        out_sr: Output spatial reference.
 
     Returns:
-        DataFrame or GeoDataFrame with all paginated results.
+        List of feature dicts (with 'attributes' and optionally 'geometry').
     """
-    raise NotImplementedError
+    url = f"{ARCGIS_BASE}/{service_name}/FeatureServer/0/query"
+    all_features = []
+    offset = 0
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        while True:
+            params = {
+                "where": where,
+                "outFields": out_fields,
+                "returnGeometry": str(return_geometry).lower(),
+                "outSR": str(out_sr),
+                "f": "json",
+                "resultRecordCount": str(PAGE_SIZE),
+                "resultOffset": str(offset),
+            }
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            features = data.get("features", [])
+            if not features:
+                break
+
+            all_features.extend(features)
+            exceeded = data.get("exceededTransferLimit", False)
+            if not exceeded:
+                break
+
+            offset += len(features)
+            print(f"  paginating {service_name}: {len(all_features)} records...")
+
+    return all_features
 
 
-async def fetch_lsoa_boundaries(vintage: str = "2021") -> gpd.GeoDataFrame:
-    """Fetch LSOA boundary geometries (Generalised Clipped version).
+async def fetch_lookup_table(
+    service_name: str,
+    print=print,
+) -> pd.DataFrame:
+    """Fetch a geographic lookup table as a DataFrame.
 
     Args:
-        vintage: "2021" or "2011".
+        service_name: ArcGIS service name.
 
     Returns:
-        GeoDataFrame with LSOA boundary polygons.
+        DataFrame with lookup columns.
     """
-    raise NotImplementedError
+    features = await fetch_arcgis_records(service_name, print=print)
+    rows = [f["attributes"] for f in features]
+    df = pd.DataFrame(rows)
+    print(f"  {service_name}: {len(df)} records")
+    return df
 
 
-async def fetch_lookup_table(service_name: str) -> pd.DataFrame:
-    """Fetch a geographic lookup table from ONS.
+async def fetch_boundaries(
+    service_name: str,
+    print=print,
+) -> gpd.GeoDataFrame:
+    """Fetch LSOA boundary geometries as a GeoDataFrame.
 
     Args:
-        service_name: ArcGIS service name for the lookup table.
+        service_name: ArcGIS service name for boundary data.
 
     Returns:
-        DataFrame with lookup mappings.
+        GeoDataFrame with boundary polygons in WGS84.
     """
-    raise NotImplementedError
+    url = f"{ARCGIS_BASE}/{service_name}/FeatureServer/0/query"
+    all_features = []
+    offset = 0
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        while True:
+            params = {
+                "where": "1=1",
+                "outFields": "*",
+                "returnGeometry": "true",
+                "outSR": "4326",
+                "f": "geojson",
+                "resultRecordCount": str(PAGE_SIZE),
+                "resultOffset": str(offset),
+            }
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            features = data.get("features", [])
+            if not features:
+                break
+
+            all_features.extend(features)
+
+            exceeded = data.get("properties", {}).get("exceededTransferLimit", False)
+            if not exceeded and not data.get("exceededTransferLimit", False):
+                break
+
+            offset += len(features)
+            print(f"  paginating boundaries: {len(all_features)} features...")
+
+    geojson = {"type": "FeatureCollection", "features": all_features}
+    gdf = gpd.GeoDataFrame.from_features(geojson, crs="EPSG:4326")
+    print(f"  {service_name}: {len(gdf)} features")
+    return gdf
+
+
+async def download_geo_data(
+    output_dir: Path,
+    lsoa_vintage: str,
+    print=print,
+) -> None:
+    """Download all geographic reference data (boundaries, lookups, crosswalk).
+
+    Args:
+        output_dir: Base directory for geo data (store/inputs/).
+        lsoa_vintage: "2021" or "2011".
+    """
+    boundaries_dir = output_dir / "lsoa_boundaries"
+    lookups_dir = output_dir / "geo_lookups"
+    crosswalk_dir = output_dir / "crosswalk"
+
+    for d in [boundaries_dir, lookups_dir, crosswalk_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # LSOA boundaries
+    boundary_path = boundaries_dir / f"lsoa_{lsoa_vintage}_bgc.geojson"
+    if not boundary_path.exists():
+        service = LSOA_BOUNDARY_SERVICES[lsoa_vintage]
+        print(f"  fetching LSOA {lsoa_vintage} boundaries...")
+        gdf = await fetch_boundaries(service, print=print)
+        gdf.to_file(boundary_path, driver="GeoJSON")
+        print(f"  saved {boundary_path.name}")
+    else:
+        print(f"  LSOA {lsoa_vintage} boundaries: already exists")
+
+    # LSOA to LAD lookup
+    lsoa_lad_path = lookups_dir / "lsoa21_to_lad25.csv"
+    if not lsoa_lad_path.exists():
+        print(f"  fetching LSOA-to-LAD lookup...")
+        df = await fetch_lookup_table(LSOA_TO_LAD_SERVICE, print=print)
+        df.to_csv(lsoa_lad_path, index=False)
+    else:
+        print(f"  LSOA-to-LAD lookup: already exists")
+
+    # LAD to Region lookup
+    lad_rgn_path = lookups_dir / "lad25_to_rgn25.csv"
+    if not lad_rgn_path.exists():
+        print(f"  fetching LAD-to-Region lookup...")
+        df = await fetch_lookup_table(LAD_TO_RGN_SERVICE, print=print)
+        df.to_csv(lad_rgn_path, index=False)
+    else:
+        print(f"  LAD-to-Region lookup: already exists")
+
+    # LSOA crosswalk (exact-fit with change indicators)
+    lsoa_xwalk_path = crosswalk_dir / "lsoa11_to_lsoa21.csv"
+    if not lsoa_xwalk_path.exists():
+        print(f"  fetching LSOA 2011-to-2021 crosswalk...")
+        df = await fetch_lookup_table(LSOA_CROSSWALK_SERVICE, print=print)
+        df.to_csv(lsoa_xwalk_path, index=False)
+    else:
+        print(f"  LSOA crosswalk: already exists")
+
+    # OA crosswalk (exact-fit)
+    oa_xwalk_path = crosswalk_dir / "oa11_to_oa21.csv"
+    if not oa_xwalk_path.exists():
+        print(f"  fetching OA 2011-to-2021 crosswalk...")
+        df = await fetch_lookup_table(OA_CROSSWALK_SERVICE, print=print)
+        df.to_csv(oa_xwalk_path, index=False)
+    else:
+        print(f"  OA crosswalk: already exists")
+
+    # OA to LSOA 2021 lookup
+    oa_lsoa_path = crosswalk_dir / "oa21_to_lsoa21.csv"
+    if not oa_lsoa_path.exists():
+        print(f"  fetching OA-to-LSOA 2021 lookup...")
+        df = await fetch_lookup_table(OA_TO_LSOA21_SERVICE, print=print)
+        df.to_csv(oa_lsoa_path, index=False)
+    else:
+        print(f"  OA-to-LSOA 2021 lookup: already exists")
