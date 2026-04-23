@@ -9,13 +9,15 @@
 # %% [markdown]
 # # nodes.fetch_gp_catchments
 #
-# Download GP catchment area data from NHS Digital.
+# Download LSOA-level GP patient registration data from NHS Digital.
 #
-# Scrapes the "Patients Registered at a GP Practice" publication pages
-# to find LSOA-level patient registration data. Downloads the ZIP files
-# containing per-practice LSOA breakdowns.
+# This data tells us how many patients from each LSOA are registered at
+# each GP practice. Combined with QOF prevalence data, this allows us to
+# estimate LSOA-level disease prevalence without spatial intersection.
 #
-# Idempotent: skips files that already exist.
+# Downloads the April edition for each year (matching QOF year boundaries).
+# LSOA data is available from April 2014 onward.
+# Idempotent: skips years where the file already exists.
 
 # %%
 #|default_exp fetch_gp_catchments
@@ -28,7 +30,7 @@ from adi import const
 # %%
 #|set_func_signature
 async def main(ctx, print) -> bool:
-    """Download GP catchment area data from NHS Digital."""
+    """Download LSOA-level GP patient registration data from NHS Digital."""
     ...
 
 # %% [markdown]
@@ -46,59 +48,125 @@ show_node_vars('fetch_gp_catchments', run_name=run_name)
 
 # %%
 #|export
+import asyncio
+import io
+import re
 import zipfile
+
+import httpx
+import pandas as pd
 
 from adi.utils.scrape import scrape_gp_catchment_urls, scrape_download_urls, download_file
 
 # %%
 #|export
+year_start = ctx.vars["year_start"]
+year_end = ctx.vars["year_end"]
+
 gp_dir = const.gp_catchments_path
 gp_dir.mkdir(parents=True, exist_ok=True)
 
-# We need GP catchment data to map QOF practice-level data to LSOAs.
-# Download the latest available LSOA-level patient registration data.
-print("fetch_gp_catchments: scraping publication listing page...")
+# GP LSOA data available from April 2014 onward.
+# QOF year YYYY-YY runs April Y to March Y+1, so we pair with April Y+1 registrations.
+# e.g. QOF 2021-22 -> April 2022 GP registrations.
+effective_start = max(year_start, 2014)
+
+print(f"fetch_gp_catchments: scraping publication listing page...")
 month_urls = await scrape_gp_catchment_urls()
-print(f"  found {len(month_urls)} GP patient publications")
 
-# Get the latest publication
-if not month_urls:
-    print("  WARNING: no GP patient publications found")
-else:
-    latest_slug = sorted(month_urls.keys())[-1]
-    latest_url = month_urls[latest_slug]
+# Find April editions
+april_urls = {}
+for slug, url in month_urls.items():
+    if "april" not in slug.lower():
+        continue
+    # Extract year from slug (e.g. "april-2022" -> 2022)
+    m = re.search(r"(\d{4})", slug)
+    if m:
+        april_urls[int(m.group(1))] = (slug, url)
 
-    extract_marker = gp_dir / f".extracted_{latest_slug}"
-    if extract_marker.exists():
-        print(f"  GP data ({latest_slug}): already downloaded, skipping")
+print(f"  found {len(april_urls)} April editions")
+
+
+async def _download_gp_lsoa_year(year: int, slug: str, pub_url: str):
+    """Download and normalise GP-LSOA data for one year."""
+    out_path = gp_dir / f"gp_lsoa_{year}.csv"
+    if out_path.exists():
+        print(f"  GP LSOA {year}: already exists, skipping")
+        return
+
+    print(f"  GP LSOA {year}: scraping download links ({slug})...")
+    downloads = await scrape_download_urls(pub_url)
+
+    # Find the LSOA file. Prefer: alt (long format CSV) > ZIP with "lsoa" > any LSOA file
+    lsoa_files = [d for d in downloads if "lsoa" in d["url"].lower()]
+    alt_files = [d for d in lsoa_files if "alt" in d["url"].lower()]
+    zip_files = [d for d in lsoa_files if d["is_zip"] and "2021" not in d["url"].lower()]
+    csv_files = [d for d in lsoa_files if d["url"].lower().endswith(".csv") and "alt" not in d["url"].lower()
+                 and "male" not in d["url"].lower() and "fem" not in d["url"].lower()]
+
+    best = alt_files or zip_files or csv_files
+    if not best:
+        print(f"  GP LSOA {year}: WARNING - no LSOA file found")
+        return
+
+    dl = best[0]
+    async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+        resp = await client.get(dl["url"])
+        resp.raise_for_status()
+
+    # Parse the data
+    if dl["url"].lower().endswith(".zip"):
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        # Find the 'all' file (both sexes combined)
+        all_files = [f for f in zf.namelist() if "all" in f.lower()]
+        if not all_files:
+            all_files = zf.namelist()[:1]
+        with zf.open(all_files[0]) as f:
+            df = pd.read_csv(f)
     else:
-        print(f"  GP data ({latest_slug}): scraping download links...")
-        downloads = await scrape_download_urls(latest_url)
+        df = pd.read_csv(io.StringIO(resp.text))
 
-        # Find the LSOA-level ZIP (contains "lsoa" in filename/text)
-        lsoa_zips = [d for d in downloads if d["is_zip"] and "lsoa" in d["text"].lower()]
-        if not lsoa_zips:
-            lsoa_zips = [d for d in downloads if d["is_zip"] and "lsoa" in d["url"].lower()]
+    # Normalise column names across eras
+    col_map = {}
+    for c in df.columns:
+        cl = c.lower().strip()
+        if cl in ("practice_code", "practicecode"):
+            col_map[c] = "practice_code"
+        elif cl in ("lsoa_code", "lsoa code"):
+            col_map[c] = "lsoa_code"
+        elif cl in ("number_of_patients", "number of patients", "all patients"):
+            col_map[c] = "patients"
+    df = df.rename(columns=col_map)
 
-        if not lsoa_zips:
-            print(f"  WARNING: no LSOA-level ZIP found for {latest_slug}")
-            # Download all ZIPs as fallback
-            lsoa_zips = [d for d in downloads if d["is_zip"]]
+    if "practice_code" not in df.columns or "lsoa_code" not in df.columns or "patients" not in df.columns:
+        print(f"  GP LSOA {year}: WARNING - unexpected columns: {list(df.columns)}")
+        return
 
-        for dl in lsoa_zips:
-            filename = dl["url"].split("/")[-1]
-            zip_path = gp_dir / filename
-            print(f"  downloading {filename}...")
-            await download_file(dl["url"], zip_path, print=print)
+    # Filter to relevant columns, drop Welsh LSOAs, aggregate sexes
+    df = df[["practice_code", "lsoa_code", "patients"]].copy()
+    df["patients"] = pd.to_numeric(df["patients"], errors="coerce").fillna(0).astype(int)
 
-            # Extract
-            print(f"  extracting {filename}...")
-            with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(gp_dir)
-            zip_path.unlink()
+    # If data has separate sex rows, aggregate
+    df = df.groupby(["practice_code", "lsoa_code"])["patients"].sum().reset_index()
 
-        extract_marker.touch()
-        print(f"  GP data ({latest_slug}): done")
+    # Filter Welsh LSOAs
+    df = df[~df["lsoa_code"].str.startswith("W")]
+
+    df.to_csv(out_path, index=False)
+    n_practices = df["practice_code"].nunique()
+    n_lsoas = df["lsoa_code"].nunique()
+    print(f"  GP LSOA {year}: {n_practices} practices x {n_lsoas} LSOAs saved")
+
+
+# Download years in parallel
+tasks = []
+for year in range(effective_start, year_end + 2):  # +2 because QOF year extends to March next year
+    if year in april_urls:
+        slug, pub_url = april_urls[year]
+        tasks.append(_download_gp_lsoa_year(year, slug, pub_url))
+
+if tasks:
+    await asyncio.gather(*tasks)
 
 print("fetch_gp_catchments: done")
 True  #|func_return_line

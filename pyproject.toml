@@ -17,6 +17,7 @@ dependencies = [
     "xlrd>=2.0",
     "nest-asyncio>=1.6",
     "pyarrow>=10.0",
+    "scipy>=1.12",
 ]
 
 [dependency-groups]
