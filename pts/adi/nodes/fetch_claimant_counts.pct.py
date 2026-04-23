@@ -49,18 +49,18 @@ from adi.utils.nomis import download_claimant_counts
 #|export
 year_start = ctx.vars["year_start"]
 year_end = ctx.vars["year_end"]
-lsoa_vintage = ctx.vars["lsoa_vintage"]
 
-# Claimant count data starts at 2013
+# Claimant count data starts at 2013.
+# Historical data is only available at LSOA 2011 (TYPE298).
+# The crosswalk in the aggregate node handles conversion to LSOA 2021.
 effective_start = max(year_start, 2013)
-geography_type = "TYPE151" if lsoa_vintage == "2021" else "TYPE298"
 
-print(f"fetch_claimant_counts: years {effective_start}-{year_end}, LSOA {lsoa_vintage} ({geography_type})")
+print(f"fetch_claimant_counts: years {effective_start}-{year_end}, LSOA 2011 (TYPE298)")
 await download_claimant_counts(
     const.claimant_data_path,
     effective_start,
     year_end,
-    geography_type=geography_type,
+    geography_type="TYPE298",
     print=print,
 )
 print("fetch_claimant_counts: done")
