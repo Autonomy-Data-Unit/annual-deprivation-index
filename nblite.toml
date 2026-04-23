@@ -2,6 +2,8 @@
 export_pipeline = """
 nbs_nodes -> lib_nodes
 nbs_nodes -> pts_nodes
+
+nbs_analysis -> pts_analysis
 """
 
 [fill]
@@ -20,3 +22,11 @@ format = "percent"
 [cl.lib_nodes]
 path = "src/adi/nodes"
 format = "module"
+
+[cl.nbs_analysis]
+path = "nbs/analysis"
+format = "ipynb"
+
+[cl.pts_analysis]
+path = "pts/analysis"
+format = "percent"
