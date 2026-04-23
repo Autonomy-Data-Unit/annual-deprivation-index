@@ -1,6 +1,6 @@
 [defaults]
 lsoa_vintage = "2021"
-year_start = 2013
+year_start = 2014
 year_end = 2024
 run_name = "default"
 

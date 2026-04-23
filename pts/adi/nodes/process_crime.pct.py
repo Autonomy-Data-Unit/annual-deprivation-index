@@ -133,21 +133,24 @@ for year in range(year_start, year_end + 1):
     pivot.columns.name = None
     pivot = pivot.rename(columns={"LSOA code": "LSOA11CD"})
 
-    # Get LSOA names (take first occurrence)
+    # Get LSOA names from crime data (take first occurrence)
     lsoa_names = (
         df[["LSOA code", "LSOA name"]]
         .drop_duplicates(subset="LSOA code")
         .rename(columns={"LSOA code": "LSOA11CD", "LSOA name": "LSOA11NM"})
     )
-    pivot = lsoa_names.merge(pivot, on="LSOA11CD", how="right")
+    pivot = pivot.merge(lsoa_names, on="LSOA11CD", how="left")
 
-    # Merge with population
+    # Merge with population — left join from population so LSOAs
+    # with zero reported crimes are included with zero counts.
     pop = _load_population(year)
-    result = pivot.merge(pop, on="LSOA11CD", how="inner")
+    pop = pop[~pop["LSOA11CD"].str.startswith("W")]
+    result = pop.merge(pivot, on="LSOA11CD", how="left")
 
-    # Compute per-capita rates for each crime type
+    # Fill NaN crime counts with 0 (LSOAs with no reported crimes)
     crime_type_cols = [c for c in result.columns if c not in ("LSOA11CD", "LSOA11NM", "pop")]
     for col in crime_type_cols:
+        result[col] = result[col].fillna(0)
         result[f"{col}_rate"] = result[col] / result["pop"]
 
     result.to_csv(out_path, index=False)
