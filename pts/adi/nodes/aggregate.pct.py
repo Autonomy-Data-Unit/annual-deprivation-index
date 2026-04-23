@@ -122,8 +122,9 @@ def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_patter
         lsoa_dir = output_dir / "lsoa" / domain_name
         lsoa_dir.mkdir(parents=True, exist_ok=True)
 
-        # Recompute rates at LSOA 2021
-        lsoa_out = lsoa21_df.copy()
+        # Add LSOA names and recompute rates
+        lsoa_names = lsoa_to_lad[["LSOA21CD", "LSOA21NM"]].drop_duplicates()
+        lsoa_out = lsoa_names.merge(lsoa21_df, on="LSOA21CD", how="right")
         for col in count_cols:
             lsoa_out[f"{col}_rate"] = lsoa_out[col] / lsoa_out[pop_col].replace(0, np.nan)
         lsoa_out.to_csv(lsoa_dir / f"{stem}.csv", index=False)
