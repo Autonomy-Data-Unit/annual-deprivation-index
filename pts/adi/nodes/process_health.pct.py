@@ -105,15 +105,27 @@ def _normalise_qof(year_key: str) -> pd.DataFrame | None:
     if not year_dir.exists():
         return None
 
-    pattern = schema.get("file_pattern", "")
-    # Search for the prevalence file
-    candidates = list(year_dir.rglob("*PREVALENCE*")) + list(year_dir.rglob("*prevalence*"))
-    if not candidates:
-        candidates = list(year_dir.rglob("*.csv"))
-    if not candidates:
-        return None
+    file_pattern = schema.get("file_pattern", "")
 
-    raw_path = candidates[0]
+    # Find the prevalence file: try file_pattern first, then heuristics
+    raw_path = None
+    if file_pattern:
+        # file_pattern may contain subdirectory (e.g. "QOF2021_v2/PREVALENCE_2021_v2.csv")
+        candidate = year_dir / file_pattern
+        if candidate.exists():
+            raw_path = candidate
+
+    if raw_path is None:
+        # Search for prevalence files, preferring practice-level
+        candidates = list(year_dir.rglob("*PREVALENCE*")) + list(year_dir.rglob("*prevalence*"))
+        # Prefer practice-level files
+        prac_files = [c for c in candidates if "prac" in c.name.lower()]
+        candidates = prac_files or candidates
+        if not candidates:
+            candidates = list(year_dir.rglob("*.csv"))
+        if not candidates:
+            return None
+        raw_path = candidates[0]
     encoding = schema.get("encoding", "utf-8")
     df = pd.read_csv(raw_path, encoding=encoding)
 
