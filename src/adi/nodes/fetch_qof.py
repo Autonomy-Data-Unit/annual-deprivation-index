@@ -4,6 +4,8 @@ from adi import const
 
 async def main(ctx, print) -> bool:
     """Download QOF prevalence data from NHS Digital."""
+    import asyncio
+    import re
     import zipfile
     from pathlib import Path
     
@@ -15,27 +17,20 @@ async def main(ctx, print) -> bool:
     raw_dir = qof_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     
-    # Map calendar years to QOF year slugs (QOF year YYYY-YY covers April Y-1 to March Y)
-    # e.g. calendar year 2020 data is in QOF year "2019-20"
-    # We need QOF years that overlap with our calendar year range
-    
     print("fetch_qof: scraping publication listing page...")
-    year_urls = scrape_qof_year_urls()
+    year_urls = await scrape_qof_year_urls()
     print(f"  found {len(year_urls)} QOF publications")
     
+    # Identify which QOF years we need
+    to_download = []
     for slug, pub_url in sorted(year_urls.items()):
-        # Parse the year from the slug. Slugs vary:
-        # "2024-25", "2019-20", "quality-and-outcomes-framework-qof-2013-14", etc.
-        # Extract the first 4-digit year found
-        import re
         year_match = re.search(r'(\d{4})-(\d{2})', slug)
         if not year_match:
             continue
         qof_start_year = int(year_match.group(1))
         qof_end_suffix = int(year_match.group(2))
     
-        # QOF year "2019-20" covers April 2019 - March 2020,
-        # so it's relevant for calendar year 2019 and 2020
+        # QOF year "2019-20" covers April 2019 - March 2020
         if qof_start_year > year_end or (qof_start_year + 1) < year_start:
             continue
     
@@ -47,17 +42,20 @@ async def main(ctx, print) -> bool:
             print(f"  QOF {year_key}: already downloaded, skipping")
             continue
     
+        to_download.append((year_key, slug, pub_url, zip_dir, extract_marker))
+    
+    
+    async def _download_qof_year(year_key, slug, pub_url, zip_dir, extract_marker):
         print(f"  QOF {year_key}: scraping download links from {slug}...")
-        csv_zip_url = find_qof_csv_zip_url(pub_url)
+        csv_zip_url = await find_qof_csv_zip_url(pub_url)
         if not csv_zip_url:
             print(f"  QOF {year_key}: WARNING - no CSV ZIP found on page")
-            continue
+            return
     
         zip_path = raw_dir / f"qof_{year_key}.zip"
-        print(f"  QOF {year_key}: downloading {csv_zip_url}...")
+        print(f"  QOF {year_key}: downloading...")
         await download_file(csv_zip_url, zip_path, print=print)
     
-        # Extract
         zip_dir.mkdir(parents=True, exist_ok=True)
         print(f"  QOF {year_key}: extracting...")
         with zipfile.ZipFile(zip_path) as zf:
@@ -65,6 +63,10 @@ async def main(ctx, print) -> bool:
         extract_marker.touch()
         zip_path.unlink()
         print(f"  QOF {year_key}: done")
+    
+    
+    if to_download:
+        await asyncio.gather(*[_download_qof_year(*args) for args in to_download])
     
     print("fetch_qof: done")
     return True

@@ -13,7 +13,7 @@ async def main(ctx, print) -> bool:
     # We need GP catchment data to map QOF practice-level data to LSOAs.
     # Download the latest available LSOA-level patient registration data.
     print("fetch_gp_catchments: scraping publication listing page...")
-    month_urls = scrape_gp_catchment_urls()
+    month_urls = await scrape_gp_catchment_urls()
     print(f"  found {len(month_urls)} GP patient publications")
     
     # Get the latest publication
@@ -28,7 +28,7 @@ async def main(ctx, print) -> bool:
             print(f"  GP data ({latest_slug}): already downloaded, skipping")
         else:
             print(f"  GP data ({latest_slug}): scraping download links...")
-            downloads = scrape_download_urls(latest_url)
+            downloads = await scrape_download_urls(latest_url)
     
             # Find the LSOA-level ZIP (contains "lsoa" in filename/text)
             lsoa_zips = [d for d in downloads if d["is_zip"] and "lsoa" in d["text"].lower()]

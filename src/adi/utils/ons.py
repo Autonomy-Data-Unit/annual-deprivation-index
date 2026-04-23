@@ -3,6 +3,7 @@
 No authentication required. Paginate at 2,000 records per request.
 """
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -178,47 +179,19 @@ async def download_geo_data(
     else:
         print(f"  LSOA {lsoa_vintage} boundaries: already exists")
 
-    # LSOA to LAD lookup
-    lsoa_lad_path = lookups_dir / "lsoa21_to_lad25.csv"
-    if not lsoa_lad_path.exists():
-        print(f"  fetching LSOA-to-LAD lookup...")
-        df = await fetch_lookup_table(LSOA_TO_LAD_SERVICE, print=print)
-        df.to_csv(lsoa_lad_path, index=False)
-    else:
-        print(f"  LSOA-to-LAD lookup: already exists")
+    # Download lookup tables and crosswalk data in parallel
+    async def _fetch_and_save(path, service, label):
+        if path.exists():
+            print(f"  {label}: already exists")
+            return
+        print(f"  fetching {label}...")
+        df = await fetch_lookup_table(service, print=print)
+        df.to_csv(path, index=False)
 
-    # LAD to Region lookup
-    lad_rgn_path = lookups_dir / "lad25_to_rgn25.csv"
-    if not lad_rgn_path.exists():
-        print(f"  fetching LAD-to-Region lookup...")
-        df = await fetch_lookup_table(LAD_TO_RGN_SERVICE, print=print)
-        df.to_csv(lad_rgn_path, index=False)
-    else:
-        print(f"  LAD-to-Region lookup: already exists")
-
-    # LSOA crosswalk (exact-fit with change indicators)
-    lsoa_xwalk_path = crosswalk_dir / "lsoa11_to_lsoa21.csv"
-    if not lsoa_xwalk_path.exists():
-        print(f"  fetching LSOA 2011-to-2021 crosswalk...")
-        df = await fetch_lookup_table(LSOA_CROSSWALK_SERVICE, print=print)
-        df.to_csv(lsoa_xwalk_path, index=False)
-    else:
-        print(f"  LSOA crosswalk: already exists")
-
-    # OA crosswalk (exact-fit)
-    oa_xwalk_path = crosswalk_dir / "oa11_to_oa21.csv"
-    if not oa_xwalk_path.exists():
-        print(f"  fetching OA 2011-to-2021 crosswalk...")
-        df = await fetch_lookup_table(OA_CROSSWALK_SERVICE, print=print)
-        df.to_csv(oa_xwalk_path, index=False)
-    else:
-        print(f"  OA crosswalk: already exists")
-
-    # OA to LSOA 2021 lookup
-    oa_lsoa_path = crosswalk_dir / "oa21_to_lsoa21.csv"
-    if not oa_lsoa_path.exists():
-        print(f"  fetching OA-to-LSOA 2021 lookup...")
-        df = await fetch_lookup_table(OA_TO_LSOA21_SERVICE, print=print)
-        df.to_csv(oa_lsoa_path, index=False)
-    else:
-        print(f"  OA-to-LSOA 2021 lookup: already exists")
+    await asyncio.gather(
+        _fetch_and_save(lookups_dir / "lsoa21_to_lad25.csv", LSOA_TO_LAD_SERVICE, "LSOA-to-LAD lookup"),
+        _fetch_and_save(lookups_dir / "lad25_to_rgn25.csv", LAD_TO_RGN_SERVICE, "LAD-to-Region lookup"),
+        _fetch_and_save(crosswalk_dir / "lsoa11_to_lsoa21.csv", LSOA_CROSSWALK_SERVICE, "LSOA crosswalk"),
+        _fetch_and_save(crosswalk_dir / "oa11_to_oa21.csv", OA_CROSSWALK_SERVICE, "OA crosswalk"),
+        _fetch_and_save(crosswalk_dir / "oa21_to_lsoa21.csv", OA_TO_LSOA21_SERVICE, "OA-to-LSOA 2021 lookup"),
+    )
