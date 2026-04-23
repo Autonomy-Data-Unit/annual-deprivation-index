@@ -4,6 +4,9 @@ from adi import const
 
 async def main(ctx, print, data_ready: dict) -> bool:
     """Process raw street crime data into per-LSOA annual rates."""
+    from pathlib import Path
+    
+    import pandas as pd
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]
     run_name = ctx.vars["run_name"]
@@ -11,9 +14,86 @@ async def main(ctx, print, data_ready: dict) -> bool:
     output_dir = const.pipeline_store_path / run_name / "crime"
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"process_crime: years {year_start}-{year_end}")
+    pop_dir = const.population_data_path / "lsoa_2011"
+    crime_dir = const.crime_data_path
     
-    # TODO: Implement crime data processing
+    print(f"process_crime: years {year_start}-{year_end}")
+    def _load_population(year: int) -> pd.DataFrame:
+        """Load LSOA 2011 population for a given year, falling back to 2020."""
+        for try_year in [year, 2020]:
+            path = pop_dir / f"population_{try_year}.csv"
+            if path.exists():
+                df = pd.read_csv(path)
+                df = df.rename(columns={"GEOGRAPHY_CODE": "LSOA11CD", "OBS_VALUE": "pop"})
+                return df[["LSOA11CD", "pop"]]
+        raise FileNotFoundError(f"No population file found for {year} or 2020 in {pop_dir}")
+    
+    
+    def _load_street_data_for_year(year: int) -> pd.DataFrame:
+        """Load and concatenate all street crime CSVs for a given year."""
+        frames = []
+        for month in range(1, 13):
+            month_dir = crime_dir / f"{year}-{month:02d}"
+            if not month_dir.exists():
+                continue
+            for csv_path in month_dir.glob("*-street.csv"):
+                df = pd.read_csv(csv_path, usecols=["LSOA code", "LSOA name", "Crime type"])
+                frames.append(df)
+        if not frames:
+            return pd.DataFrame(columns=["LSOA code", "LSOA name", "Crime type"])
+        return pd.concat(frames, ignore_index=True)
+    for year in range(year_start, year_end + 1):
+        out_path = output_dir / f"crime_{year}.csv"
+        if out_path.exists():
+            print(f"  {year}: already processed, skipping")
+            continue
+    
+        print(f"  {year}: loading street crime data...")
+        df = _load_street_data_for_year(year)
+        if df.empty:
+            print(f"  {year}: no crime data found, skipping")
+            continue
+    
+        # Drop rows with no LSOA
+        df = df.dropna(subset=["LSOA code"])
+    
+        # Filter out Welsh LSOAs
+        df = df[~df["LSOA code"].str.startswith("W")]
+    
+        # Count crimes by LSOA and crime type
+        counts = (
+            df.groupby(["LSOA code", "Crime type"])
+            .size()
+            .reset_index(name="count")
+        )
+    
+        # Pivot to wide format: one column per crime type
+        pivot = counts.pivot_table(
+            index="LSOA code", columns="Crime type", values="count", fill_value=0
+        ).reset_index()
+        pivot.columns.name = None
+        pivot = pivot.rename(columns={"LSOA code": "LSOA11CD"})
+    
+        # Get LSOA names (take first occurrence)
+        lsoa_names = (
+            df[["LSOA code", "LSOA name"]]
+            .drop_duplicates(subset="LSOA code")
+            .rename(columns={"LSOA code": "LSOA11CD", "LSOA name": "LSOA11NM"})
+        )
+        pivot = lsoa_names.merge(pivot, on="LSOA11CD", how="right")
+    
+        # Merge with population
+        pop = _load_population(year)
+        result = pivot.merge(pop, on="LSOA11CD", how="inner")
+    
+        # Compute per-capita rates for each crime type
+        crime_type_cols = [c for c in result.columns if c not in ("LSOA11CD", "LSOA11NM", "pop")]
+        for col in crime_type_cols:
+            result[f"{col}_rate"] = result[col] / result["pop"]
+    
+        result.to_csv(out_path, index=False)
+        total_crimes = result[crime_type_cols].sum().sum()
+        print(f"  {year}: {len(result)} LSOAs, {int(total_crimes)} total crimes across {len(crime_type_cols)} types")
     
     print(f"process_crime: done, output at {const.rel(output_dir)}")
     return True
