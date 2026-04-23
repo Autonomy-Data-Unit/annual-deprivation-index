@@ -1,0 +1,12 @@
+[defaults]
+lsoa_vintage = "2021"
+year_start = 2013
+year_end = 2024
+run_name = "default"
+
+[runs.default]
+# Inherits all defaults
+
+[runs.test]
+year_start = 2022
+year_end = 2023

@@ -1,0 +1,22 @@
+# nblite configuration
+export_pipeline = """
+nbs_nodes -> lib_nodes
+nbs_nodes -> pts_nodes
+"""
+
+[fill]
+code_locations = [
+    "nbs_nodes",
+]
+
+[cl.nbs_nodes]
+path = "nbs/adi/nodes"
+format = "ipynb"
+
+[cl.pts_nodes]
+path = "pts/adi/nodes"
+format = "percent"
+
+[cl.lib_nodes]
+path = "src/adi/nodes"
+format = "module"

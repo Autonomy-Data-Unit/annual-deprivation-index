@@ -1,0 +1,157 @@
+{
+  "node_vars": {
+    "lsoa_vintage": {
+      "type": "str"
+    },
+    "year_start": {
+      "type": "int"
+    },
+    "year_end": {
+      "type": "int"
+    },
+    "run_name": {
+      "type": "str"
+    }
+  },
+  "max_epochs": 1,
+  "project_root_override": "../",
+  "graph": {
+    "nodes": [
+      {
+        "name": "fetch_data",
+        "description": "Download and cache all raw data sources.",
+        "execution_config": {
+          "run_on_init": true
+        },
+        "extra": {
+          "source_path": "src/adi/nodes/fetch_data.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.fetch_data.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "broadcast_data_ready",
+        "description": "Fan-out from fetch_data to processing nodes.",
+        "factory": "netrun.node_factories.broadcast",
+        "factory_args": {
+          "num_outputs": 3
+        },
+        "type": "node"
+      },
+      {
+        "name": "process_claimant_counts",
+        "description": "Process raw claimant count data into per-LSOA annual rates.",
+        "extra": {
+          "source_path": "src/adi/nodes/process_claimant_counts.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.process_claimant_counts.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "process_crime",
+        "description": "Process raw street crime data into per-LSOA annual rates.",
+        "extra": {
+          "source_path": "src/adi/nodes/process_crime.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.process_crime.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "process_health",
+        "description": "Process QOF + GP catchment data into per-LSOA health prevalence estimates.",
+        "extra": {
+          "source_path": "src/adi/nodes/process_health.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.process_health.main"
+        },
+        "type": "node"
+      },
+      {
+        "name": "join_domains",
+        "description": "Synchronisation barrier: wait for all three domain processors.",
+        "factory": "netrun.node_factories.join",
+        "factory_args": {
+          "ports": [
+            "claimant_counts",
+            "crime",
+            "health"
+          ]
+        },
+        "type": "node"
+      },
+      {
+        "name": "aggregate",
+        "description": "Apply LSOA crosswalk and aggregate to LAD/Region/England.",
+        "extra": {
+          "source_path": "src/adi/nodes/aggregate.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.aggregate.main"
+        },
+        "type": "node"
+      }
+    ],
+    "edges": [
+      {
+        "source_node": "fetch_data",
+        "source_port": "out",
+        "target_node": "broadcast_data_ready",
+        "target_port": "in_0"
+      },
+      {
+        "source_node": "broadcast_data_ready",
+        "source_port": "out_0",
+        "target_node": "process_claimant_counts",
+        "target_port": "data_ready"
+      },
+      {
+        "source_node": "broadcast_data_ready",
+        "source_port": "out_1",
+        "target_node": "process_crime",
+        "target_port": "data_ready"
+      },
+      {
+        "source_node": "broadcast_data_ready",
+        "source_port": "out_2",
+        "target_node": "process_health",
+        "target_port": "data_ready"
+      },
+      {
+        "source_node": "process_claimant_counts",
+        "source_port": "out",
+        "target_node": "join_domains",
+        "target_port": "claimant_counts"
+      },
+      {
+        "source_node": "process_crime",
+        "source_port": "out",
+        "target_node": "join_domains",
+        "target_port": "crime"
+      },
+      {
+        "source_node": "process_health",
+        "source_port": "out",
+        "target_node": "join_domains",
+        "target_port": "health"
+      },
+      {
+        "source_node": "join_domains",
+        "source_port": "out",
+        "target_node": "aggregate",
+        "target_port": "domains_ready"
+      }
+    ]
+  }
+}
