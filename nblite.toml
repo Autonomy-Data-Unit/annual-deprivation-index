@@ -4,6 +4,7 @@ nbs_nodes -> lib_nodes
 nbs_nodes -> pts_nodes
 
 nbs_analysis -> pts_analysis
+nbs_validation -> pts_validation
 """
 
 [fill]
@@ -29,4 +30,12 @@ format = "ipynb"
 
 [cl.pts_analysis]
 path = "pts/analysis"
+format = "percent"
+
+[cl.nbs_validation]
+path = "nbs/validation"
+format = "ipynb"
+
+[cl.pts_validation]
+path = "pts/validation"
 format = "percent"
