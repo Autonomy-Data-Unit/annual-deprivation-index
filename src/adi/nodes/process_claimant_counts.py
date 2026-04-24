@@ -4,6 +4,7 @@ from adi import const
 
 async def main(ctx, print, data_ready: dict) -> bool:
     """Process raw claimant count data into per-LSOA annual rates."""
+    import numpy as np
     import pandas as pd
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]
@@ -65,7 +66,7 @@ async def main(ctx, print, data_ready: dict) -> bool:
         result = annual.merge(pop, on="LSOA11CD", how="inner")
     
         # Compute rate
-        result["claimant_rate"] = result["claimant_count"] / result["pop"]
+        result["claimant_rate"] = result["claimant_count"] / result["pop"].replace(0, np.nan)
     
         result.to_csv(out_path, index=False)
         print(f"  {year}: {len(result)} LSOAs, mean rate={result['claimant_rate'].mean():.4f}")

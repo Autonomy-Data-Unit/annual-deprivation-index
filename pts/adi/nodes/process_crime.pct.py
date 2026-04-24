@@ -53,6 +53,7 @@ show_node_vars('process_crime', run_name=run_name)
 #|export
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # %%
@@ -151,7 +152,7 @@ for year in range(year_start, year_end + 1):
     crime_type_cols = [c for c in result.columns if c not in ("LSOA11CD", "LSOA11NM", "pop")]
     for col in crime_type_cols:
         result[col] = result[col].fillna(0)
-        result[f"{col}_rate"] = result[col] / result["pop"]
+        result[f"{col}_rate"] = result[col] / result["pop"].replace(0, np.nan)
 
     result.to_csv(out_path, index=False)
     total_crimes = result[crime_type_cols].sum().sum()

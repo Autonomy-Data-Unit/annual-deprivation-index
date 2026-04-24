@@ -88,10 +88,20 @@ async def main(ctx, print, data_ready: dict) -> bool:
         else:
             pop_df = df[[practice_col, list_pop_col]].drop_duplicates(subset=practice_col)
     
-        # Pivot: one row per practice, one column per disease group
+        # Pivot: one row per practice, one column per disease group.
+        #
+        # We use aggfunc="max" to handle the 2013_14 era where "HF" (Heart Failure)
+        # has two rows per practice sharing the same indicator_group code:
+        #   - "Heart Failure due to LVD" (narrow subtype, e.g. register=9)
+        #   - "Heart Failure" (broad category, e.g. register=48)
+        # The LVD patients are a subset of the broader HF register, so summing
+        # would double-count. "max" picks the broader register (48), which is
+        # consistent with later years that report a single HF row.
+        # For all other diseases and eras there is one row per (practice, disease),
+        # so the aggfunc choice has no effect.
         pivot = df.pivot_table(
             index=practice_col, columns=disease_col, values=register_col,
-            aggfunc="first", fill_value=0,
+            aggfunc="max", fill_value=0,
         ).reset_index()
         pivot.columns.name = None
     
@@ -131,22 +141,14 @@ async def main(ctx, print, data_ready: dict) -> bool:
     
         # Aggregate to LSOA level in a single groupby
         wprev_cols = [f"_wprev_{d}" for d in disease_cols]
-        merged["_weighted_list_pop"] = merged["weight"] * merged["list_pop"]
-        agg_cols = wprev_cols + ["_weighted_list_pop"]
-        lsoa_agg = merged.groupby("lsoa_code")[agg_cols].sum()
+        lsoa_agg = merged.groupby("lsoa_code")[wprev_cols].sum()
     
         # Build result DataFrame
         result = pd.DataFrame(index=lsoa_agg.index)
         for disease in disease_cols:
             result[f"{disease}_prevalence_rate"] = lsoa_agg[f"_wprev_{disease}"]
-        result["list_pop"] = lsoa_agg["_weighted_list_pop"]
         result.index.name = "LSOA11CD"
         result = result.reset_index().rename(columns={"lsoa_code": "LSOA11CD"})
-    
-        # Compute afflicted counts from prevalence * list_pop
-        for disease in disease_cols:
-            rate_col = f"{disease}_prevalence_rate"
-            result[f"{disease}_afflicted"] = result[rate_col] * result["list_pop"]
     
         return result
     def _load_population(year: int) -> pd.DataFrame:
@@ -207,9 +209,15 @@ async def main(ctx, print, data_ready: dict) -> bool:
         # Estimate LSOA prevalence
         result = _estimate_lsoa_prevalence(qof, gp_lsoa)
     
-        # Merge with population data
+        # Merge with population data and compute afflicted counts
         pop = _load_population(qof_end)
         result = result.merge(pop, on="LSOA11CD", how="inner")
+    
+        # Compute afflicted counts from prevalence * ONS population
+        disease_cols_cur = [c for c in result.columns if c.endswith("_prevalence_rate")]
+        for rate_col in disease_cols_cur:
+            afflicted_col = rate_col.replace("_prevalence_rate", "_afflicted")
+            result[afflicted_col] = result[rate_col] * result["pop"]
     
         result.to_csv(out_path, index=False)
         disease_cols = [c for c in result.columns if c.endswith("_prevalence_rate")]
@@ -339,8 +347,8 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 df[col] = pd.Series(matrix[i, :], index=all_lsoas).reindex(df.index)
                 # Update afflicted counts
                 afflicted_col = col.replace("_prevalence_rate", "_afflicted")
-                if afflicted_col in df.columns and "list_pop" in df.columns:
-                    df[afflicted_col] = df[col] * df["list_pop"]
+                if afflicted_col in df.columns and "pop" in df.columns:
+                    df[afflicted_col] = df[col] * df["pop"]
     
         # Save interpolated data
         for yk in sorted_years:

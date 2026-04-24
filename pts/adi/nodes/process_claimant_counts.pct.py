@@ -51,6 +51,7 @@ show_node_vars('process_claimant_counts', run_name=run_name)
 
 # %%
 #|export
+import numpy as np
 import pandas as pd
 
 # %%
@@ -129,7 +130,7 @@ for year in range(effective_start, year_end + 1):
     result = annual.merge(pop, on="LSOA11CD", how="inner")
 
     # Compute rate
-    result["claimant_rate"] = result["claimant_count"] / result["pop"]
+    result["claimant_rate"] = result["claimant_count"] / result["pop"].replace(0, np.nan)
 
     result.to_csv(out_path, index=False)
     print(f"  {year}: {len(result)} LSOAs, mean rate={result['claimant_rate'].mean():.4f}")

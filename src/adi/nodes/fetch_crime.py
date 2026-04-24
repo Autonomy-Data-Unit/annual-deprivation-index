@@ -17,14 +17,19 @@ async def main(ctx, print) -> bool:
     crime_dir.mkdir(parents=True, exist_ok=True)
     
     # Each archive covers ~36 months ending at the archive date.
-    # To cover a calendar year Y, we need an archive from at least Y+1.
-    # We download December archives which cover [Y-2, Y].
-    # To cover year_start..year_end, we need archives for
-    # years (year_start+2)..(year_end+2), capped at available data.
+    # The December Y archive covers roughly Jan (Y-2) to Dec Y.
+    # So we only need one archive every 3 years for full coverage.
+    # We step backward from year_end to ensure the most recent data
+    # is always covered, adding archives every 3 years.
     archive_years = set()
-    for year in range(year_start, year_end + 1):
-        # The December Y archive covers roughly Jan (Y-2) to Dec Y
-        archive_years.add(year)
+    y = year_end
+    while y >= year_start:
+        archive_years.add(y)
+        y -= 3
+    # Ensure the earliest year is covered (the archive at y covers [y-2, y],
+    # so if year_start > y-2 we might not need it, but it's safe to include)
+    if year_start < min(archive_years) - 2:
+        archive_years.add(min(archive_years) - 3)
     
     print(f"fetch_crime: need archives for years {sorted(archive_years)}")
     
