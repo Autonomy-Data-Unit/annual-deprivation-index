@@ -103,6 +103,10 @@ store/outputs/{run_name}/
 
 All outputs include absolute counts and populations alongside rates, enabling further aggregation.
 
+## Methodology
+
+See [METHODOLOGY.md](METHODOLOGY.md) for a detailed description of the data processing methodology, including the prevalence estimation formula, LSOA crosswalk procedure, temporal interpolation, and known limitations.
+
 ## Data Sources
 
 - **Claimant counts**: [Nomis](https://www.nomisweb.co.uk/datasets/ucjsa) Universal Credit dataset `NM_162_1` at LSOA 2011
