@@ -37,6 +37,8 @@ cp design/system/logo/adi-mark.svg design/system/logo/adi-mark-favicon.svg \
    design/system/logo/adi-lockup-light.svg design/system/logo/adi-lockup-dark.svg site/static/brand/
 cp design/system/favicon/favicon.svg design/system/favicon/favicon-32.png \
    design/system/favicon/favicon-16.png design/system/favicon/apple-touch-icon-180.png site/static/
+cp design/system/keyvisual/og-image.png site/static/og-image.png
+cp design/system/keyvisual/keyvisual-light.png design/system/keyvisual/keyvisual-dark.png site/static/brand/ 2>/dev/null || true
 cp design/system/tokens/tokens.css site/src/lib/styles/tokens.css
 
 echo "[web] done. static payload:"
