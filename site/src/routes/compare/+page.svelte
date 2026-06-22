@@ -5,6 +5,7 @@
   import LineChart from '$lib/components/LineChart.svelte';
   import BarChart from '$lib/components/BarChart.svelte';
   import DomainIcon from '$lib/components/DomainIcon.svelte';
+  import { browser } from '$app/environment';
   import { manifest as loadManifest, hierarchy as loadHier, areaFile, codes as codesFile, getJSON, fmtValue, DOMAIN_HUES } from '$lib/data.js';
 
   const SERIES_COLORS = ['#1f6f6b', '#9c4a22', '#6b5b95', '#b8860b'];
@@ -63,6 +64,17 @@
     query = '';
   }
   function remove(i) { selected = selected.filter((_, j) => j !== i); }
+
+  // keep the URL in sync so an edited comparison stays shareable/bookmarkable
+  $effect(() => {
+    if (!browser) return;
+    const q = selected.map((s) => `${s.level}:${s.code}`).join(',');
+    const url = new URL(location.href);
+    if (q) url.searchParams.set('areas', q);
+    else url.searchParams.delete('areas');
+    url.searchParams.delete('a');
+    history.replaceState(history.state, '', url);
+  });
   function setDomain(d) { domain = d; const ms = mani.domains[d].metrics; if (!ms.find(m=>m.key===metricKey)) metricKey = ms[0].key; }
 
   function seriesValues(rec) {

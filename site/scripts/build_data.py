@@ -122,6 +122,133 @@ for lv in LEVELS:
         if he is not None:
             data[lv]["health"][yr] = he.set_index("code")
 
+# ---------------------------------------------------------------- data-quality corrections
+# Documented, transparent corrections for KNOWN source-data defects (flagged by
+# scripts/validate_outputs.py on the raw outputs). Each is logged. Not silent fallbacks:
+# the validator still runs on the uncorrected outputs and the About page documents these.
+print("Applying data-quality corrections...")
+
+# (1) Drop QOF indicators with no usable prevalence series (sparse/empty: present in
+#     only one year or all-zero). Leaves the canonical 21 conditions.
+DROP_HEALTH = {"CVDPP", "SMOK", "THY"}
+_before = len(HEALTH)
+HEALTH = [(c, l) for (c, l) in HEALTH if c not in DROP_HEALTH]
+print(f"  health: dropped {sorted(DROP_HEALTH)} -> {len(HEALTH)} conditions (was {_before})")
+
+# (2) Single-year source anomalies: a disease whose register switched basis for one
+#     publication (DEP 2023-24 reported new-diagnosis incidence ~1.5% vs cumulative
+#     prevalence ~13-14%; OST 2014-15 dip-and-reverse). Null + linearly interpolate
+#     from the flanking years (matches the pipeline's own ≤2-gap interpolation policy).
+HEALTH_FIX = [("DEP", 2024), ("OST", 2015)]
+for dis, yr in HEALTH_FIX:
+    rc, ac = f"{dis}_afflicted_rate", f"{dis}_afflicted"
+    n = 0
+    for lv in LEVELS:
+        cur = data[lv]["health"].get(yr)
+        left = data[lv]["health"].get(yr - 1)
+        right = data[lv]["health"].get(yr + 1)
+        if right is None:  # e.g. 2024's right anchor is health_2024_25 (mapped year 2025)
+            r = read_level(lv, "health", yr + 1)
+            right = r.set_index("code") if r is not None else None
+        if cur is None or left is None or right is None or rc not in cur.columns:
+            continue
+        for code in cur.index:
+            if code not in left.index or code not in right.index:
+                continue
+            lvv, rvv = left.at[code, rc], right.at[code, rc]
+            if pd.isna(lvv) or pd.isna(rvv):
+                continue
+            newr = (float(lvv) + float(rvv)) / 2.0
+            cur.at[code, rc] = newr
+            if ac in cur.columns and "pop" in cur.columns and not pd.isna(cur.at[code, "pop"]):
+                cur.at[code, ac] = newr * float(cur.at[code, "pop"])
+            n += 1
+    print(f"  health: {dis} {yr} null+interpolated across {n} areas")
+
+# (3) Crime: police forces with reporting gaps (notably Greater Manchester from mid-2019)
+#     emit near-zero counts that are NOT real. Detect per-LAD: a year whose total crime
+#     rate is < 20% of that LAD's own normal (median of non-trivial years) is a data gap.
+#     Null those LAD-years (and their LSOAs); recompute Region/England crime rates from
+#     REPORTING areas only so national/regional rates aren't deflated by the gap.
+_crime_cnt_cols = lambda df: [t[0] for t in CRIME_TYPES if t[0] in df.columns]
+def _lad_total_rate(df, code):
+    if code not in df.index:
+        return None
+    r = df.loc[code]
+    cols = _crime_cnt_cols(df)
+    tot = float(sum(float(r[c]) for c in cols if not pd.isna(r[c])))
+    pop = float(r["pop"]) if not pd.isna(r["pop"]) else 0.0
+    return (tot / pop) if pop > 0 else None
+
+_lad_crime = data["lad"]["crime"]
+_lad_codes = set().union(*[set(df.index) for df in _lad_crime.values()]) if _lad_crime else set()
+nonreporting: dict[int, set] = {}
+for code in _lad_codes:
+    series = {yr: _lad_total_rate(df, code) for yr, df in _lad_crime.items()}
+    rates = [v for v in series.values() if v is not None]
+    normal_pool = [v for v in rates if v > 0.01]
+    if not normal_pool:
+        continue
+    normal = float(np.median(normal_pool))
+    for yr, v in series.items():
+        if v is not None and v < 0.2 * normal:
+            nonreporting.setdefault(yr, set()).add(code)
+
+# null nonreporting LADs + their LSOAs
+lu_lad0 = pd.read_csv(LU_LAD)[["LSOA21CD", "LAD25CD"]]
+_lsoa_to_lad = dict(zip(lu_lad0["LSOA21CD"], lu_lad0["LAD25CD"]))
+lu_rgn0 = pd.read_csv(LU_RGN)[["LAD25CD", "RGN25CD"]].drop_duplicates("LAD25CD")
+_lad_to_rgn = dict(zip(lu_rgn0["LAD25CD"], lu_rgn0["RGN25CD"]))
+_n_gap = sum(len(s) for s in nonreporting.values())
+for yr, codes in nonreporting.items():
+    df = data["lad"]["crime"].get(yr)
+    if df is not None:
+        cols = [c for c in df.columns if c not in ("name", "pop")]
+        for code in codes:
+            if code in df.index:
+                df.loc[code, cols] = np.nan
+    ldf = data["lsoa"]["crime"].get(yr)
+    if ldf is not None:
+        cols = [c for c in ldf.columns if c not in ("name", "pop")]
+        bad_lsoas = [ls for ls, ld in _lsoa_to_lad.items() if ld in codes and ls in ldf.index]
+        for ls in bad_lsoas:
+            ldf.loc[ls, cols] = np.nan
+
+# recompute Region + England crime from reporting LADs only (representative rates)
+for yr, codes in nonreporting.items():
+    ldf = data["lad"]["crime"].get(yr)
+    if ldf is None:
+        continue
+    reporting = [c for c in ldf.index if c not in codes]
+    cnt_cols = _crime_cnt_cols(ldf)
+    # England
+    edf = data["england"]["crime"].get(yr)
+    if edf is not None:
+        ecode = edf.index[0]
+        sub = ldf.loc[reporting]
+        pop = float(sub["pop"].sum())
+        for c in cnt_cols:
+            tot = float(sub[c].sum())
+            edf.at[ecode, c] = tot
+            edf.at[ecode, f"{c}_rate"] = (tot / pop) if pop > 0 else np.nan
+        edf.at[ecode, "pop"] = pop
+    # Regions
+    rdf = data["region"]["crime"].get(yr)
+    if rdf is not None:
+        for rcode in rdf.index:
+            rep = [c for c in reporting if _lad_to_rgn.get(c) == rcode]
+            if not rep:
+                continue
+            sub = ldf.loc[rep]
+            pop = float(sub["pop"].sum())
+            for c in cnt_cols:
+                tot = float(sub[c].sum())
+                rdf.at[rcode, c] = tot
+                rdf.at[rcode, f"{c}_rate"] = (tot / pop) if pop > 0 else np.nan
+            rdf.at[rcode, "pop"] = pop
+print(f"  crime: nulled {_n_gap} non-reporting LAD-years (force gaps) across {len(nonreporting)} years; "
+      f"Region/England crime recomputed from reporting areas")
+
 # canonical code/name per level (sorted by code), from the latest employment year
 codes_by_level: dict[str, list[str]] = {}
 names_by_level: dict[str, dict[str, str]] = {}
@@ -196,7 +323,7 @@ def metric_series_for_level(lv, domain, metric_key):
         elif domain == "crime":
             if metric_key == "total":
                 count_cols = [t[0] for t in CRIME_TYPES if t[0] in df.columns]
-                tot = df[count_cols].sum(axis=1)
+                tot = df[count_cols].sum(axis=1, min_count=1)  # all-NaN row -> NaN (no data)
                 s = tot / df["pop"].replace(0, np.nan)
             else:
                 name = next(t[0] for t in CRIME_TYPES if t[1] == metric_key)
@@ -313,6 +440,7 @@ def build_record(lv, code):
             pop = r["pop"]
             cri["pop"].append(int(pop) if not pd.isna(pop) else None)
             tot = 0.0
+            any_cnt = False
             for name, slug in CRIME_TYPES:
                 cnt = r.get(name, np.nan)
                 rate = r.get(f"{name}_rate", np.nan)
@@ -320,8 +448,14 @@ def build_record(lv, code):
                 cri["types"][slug]["rate"].append(rnd(rate, 8))
                 if not pd.isna(cnt):
                     tot += cnt
-            cri["total_count"].append(rnd(tot, 1))
-            cri["total_rate"].append(rnd(tot / pop, 8) if pop and not pd.isna(pop) and pop > 0 else None)
+                    any_cnt = True
+            # all-NaN crime row = data gap (e.g. force not reporting) -> no data, not 0
+            if any_cnt:
+                cri["total_count"].append(rnd(tot, 1))
+                cri["total_rate"].append(rnd(tot / pop, 8) if pop and not pd.isna(pop) and pop > 0 else None)
+            else:
+                cri["total_count"].append(None)
+                cri["total_rate"].append(None)
         else:
             cri["pop"].append(None); cri["total_count"].append(None); cri["total_rate"].append(None)
             for _, slug in CRIME_TYPES:

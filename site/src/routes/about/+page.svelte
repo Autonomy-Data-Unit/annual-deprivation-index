@@ -43,7 +43,10 @@
     <li>QOF reflects <em>GP-diagnosed</em> conditions and so understates genuinely under-diagnosed conditions (e.g. dementia, depression).</li>
     <li>For 2021+ the 2011-vintage population series is unavailable, so the 2020 estimate is used as a fallback before crosswalking.</li>
     <li>Six "complex-change" LSOAs are excluded from the 2011→2021 conversion.</li>
+    <li><strong>Greater Manchester crime gap:</strong> Greater Manchester Police stopped supplying street-level data to data.police.uk in mid-2019, so its boroughs have no usable crime data for 2020 onward. These are shown as <em>no data</em> (not zero), and regional/national crime rates are computed from reporting areas only.</li>
+    <li><strong>Depression 2023-24 &amp; osteoporosis 2014-15:</strong> the NHS QOF publication reported these single-year figures on a different basis (incidence rather than cumulative prevalence). Each is treated as missing and linearly interpolated from the neighbouring years, consistent with the pipeline's gap-filling.</li>
   </ul>
+  <p class="muted small">All data-quality corrections are surfaced by an automated validator that runs over the raw outputs; see the pipeline repository.</p>
 
   <h2>Data &amp; reproducibility</h2>
   <p class="measure">The full pipeline — fetch, process and aggregate — is open source and reproducible end to end. All sources are public; no API keys are required.</p>

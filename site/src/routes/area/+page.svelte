@@ -85,7 +85,8 @@
   // crumb
   const crumbs = $derived.by(() => {
     if (!rec) return [];
-    const out = [{ name: 'England', level: 'england', code: 'E92000001' }];
+    const out = [];
+    if (rec.level !== 'england') out.push({ name: 'England', level: 'england', code: 'E92000001' });
     if (rec.parents?.region) out.push({ name: rec.parents.region.name, level: 'region', code: rec.parents.region.code });
     if (rec.parents?.lad) out.push({ name: rec.parents.lad.name, level: 'lad', code: rec.parents.lad.code });
     out.push({ name: rec.name, level: rec.level, code: rec.code, current: true });
