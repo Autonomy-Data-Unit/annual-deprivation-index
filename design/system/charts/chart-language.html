@@ -1,0 +1,126 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ADI chart colour language</title>
+<link rel="stylesheet" href="../tokens/tokens.css">
+<link rel="stylesheet" href="chart-language.css">
+<style>
+  body { font-family: var(--font-sans); color: var(--ink); background: var(--bg);
+         margin: 0; padding: var(--sp-6); }
+  h2 { font-family: var(--font-serif); font-size: var(--fs-5); margin: 0 0 var(--sp-1); }
+  h3 { font-family: var(--font-serif); font-size: var(--fs-4); margin: var(--sp-6) 0 var(--sp-2); }
+  p.note { color: var(--grey-1); font-size: var(--fs-1); max-width: 60ch; margin: 0 0 var(--sp-3); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-5); }
+  .card { background: var(--paper); border: var(--border-card); padding: var(--sp-4); }
+  .ramp { display: flex; height: 28px; margin: var(--sp-1) 0; }
+  .ramp > div { flex: 1; }
+  .swatch-row { display: flex; gap: var(--sp-1); align-items: center; font-size: var(--fs-0);
+                color: var(--grey-1); margin: 2px 0; }
+  .chip { width: 22px; height: 22px; border: 1px solid rgba(0,0,0,.08); }
+  svg text { font-family: var(--font-sans); fill: var(--axis-text); font-size: 10px; }
+  .legend { display:flex; gap:16px; font-size: var(--fs-1); margin-top: var(--sp-2); }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .legend i { width:14px; height:3px; display:inline-block; }
+</style>
+
+<h2>ADI chart colour language</h2>
+<p class="note">Token ramps applied to chart roles. Neutral slate carries the data
+surface; golden is reserved for the one highlighted/selected element. Furniture
+(axes, gridlines) stays faint — data-ink first.</p>
+
+<div class="grid">
+
+  <div class="card">
+    <h3 style="margin-top:0">Sequential — choropleth</h3>
+    <p class="note">Cool slate, pale→charcoal. The map data surface.</p>
+    <div class="ramp">
+      <div style="background:var(--seq-1)"></div>
+      <div style="background:var(--seq-2)"></div>
+      <div style="background:var(--seq-3)"></div>
+      <div style="background:var(--seq-4)"></div>
+      <div style="background:var(--seq-5)"></div>
+      <div style="background:var(--seq-6)"></div>
+      <div style="background:var(--seq-7)"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Diverging — change maps</h3>
+    <p class="note">Teal (improvement) ↔ rust (worsening). Not golden.</p>
+    <div class="ramp">
+      <div style="background:var(--div-neg-3)"></div>
+      <div style="background:var(--div-neg-2)"></div>
+      <div style="background:var(--div-neg-1)"></div>
+      <div style="background:var(--div-0)"></div>
+      <div style="background:var(--div-pos-1)"></div>
+      <div style="background:var(--div-pos-2)"></div>
+      <div style="background:var(--div-pos-3)"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Line — COVID claimant spike</h3>
+    <p class="note">National UC claimant rate 2014–2024. Spike band 2019→2020;
+    one series in ink, England mean as faint reference.</p>
+    <svg viewBox="0 0 360 160" width="100%">
+      <!-- spike band -->
+      <rect x="222" y="10" width="40" height="120" fill="var(--spike-band)"/>
+      <!-- gridlines -->
+      <line x1="40" y1="130" x2="350" y2="130" stroke="var(--axis-line)"/>
+      <line x1="40" y1="10" x2="40" y2="130" stroke="var(--axis-line)"/>
+      <!-- reference: flat-ish England mean -->
+      <polyline fill="none" stroke="var(--reference)" stroke-width="1"
+        stroke-dasharray="3 3"
+        points="40,118 71,116 102,114 133,112 164,110 195,108 226,60 257,72 288,80 319,86 350,90"/>
+      <!-- main series: rate, spiking at 2020 -->
+      <polyline fill="none" stroke="var(--series-1)" stroke-width="2"
+        points="40,120 71,118 102,117 133,115 164,113 195,112 226,52 257,66 288,76 319,82 350,86"/>
+      <!-- highlighted point at the spike -->
+      <circle cx="226" cy="52" r="3" fill="var(--series-highlight)"/>
+      <text x="232" y="48">3.88% (2020)</text>
+      <text x="195" y="126">2019</text>
+      <text x="36" y="145" text-anchor="start">2014</text>
+      <text x="350" y="145" text-anchor="end">2024</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Bar — domains vs IMD correlation</h3>
+    <p class="note">r vs IMD per domain. Selected domain golden; others ink.</p>
+    <svg viewBox="0 0 360 160" width="100%">
+      <line x1="60" y1="130" x2="350" y2="130" stroke="var(--axis-line)"/>
+      <!-- employment r=0.87 (selected/highlight) -->
+      <rect x="70" y="22" width="60" height="108" fill="var(--series-highlight)"/>
+      <text x="100" y="145" text-anchor="middle">Employment</text>
+      <text x="100" y="16" text-anchor="middle" fill="var(--ink)">0.87</text>
+      <!-- crime r=0.70 -->
+      <rect x="160" y="43" width="60" height="87" fill="var(--series-1)"/>
+      <text x="190" y="145" text-anchor="middle">Crime</text>
+      <text x="190" y="37" text-anchor="middle" fill="var(--ink)">0.70</text>
+      <!-- health r≈0 -->
+      <rect x="250" y="128" width="60" height="2" fill="var(--series-5)"/>
+      <text x="280" y="145" text-anchor="middle">Health</text>
+      <text x="280" y="122" text-anchor="middle" fill="var(--ink)">≈0</text>
+    </svg>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Categorical series</h3>
+    <div class="swatch-row"><span class="chip" style="background:var(--series-1)"></span> series-1 · ink (primary)</div>
+    <div class="swatch-row"><span class="chip" style="background:var(--series-2)"></span> series-2 · steel</div>
+    <div class="swatch-row"><span class="chip" style="background:var(--series-3)"></span> series-3 · rust</div>
+    <div class="swatch-row"><span class="chip" style="background:var(--series-4)"></span> series-4 · teal</div>
+    <div class="swatch-row"><span class="chip" style="background:var(--series-5)"></span> series-5 · grey (context)</div>
+    <div class="swatch-row"><span class="chip" style="background:var(--series-highlight)"></span> highlight · golden (selected only)</div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0">Sparkline</h3>
+    <p class="note">Inline trend; end-point in golden.</p>
+    <svg viewBox="0 0 200 50" width="200">
+      <polyline fill="none" stroke="var(--spark-line)" stroke-width="1.5"
+        points="4,40 24,38 44,39 64,36 84,34 104,16 124,24 144,28 164,30 184,32"/>
+      <circle cx="184" cy="32" r="2.5" fill="var(--spark-point)"/>
+    </svg>
+  </div>
+
+</div>

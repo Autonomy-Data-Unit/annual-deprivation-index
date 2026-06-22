@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="ADI">
+  <title>ADI — Annual Deprivation Index</title>
+  <rect x="2.250" y="2.250" width="95.500" height="95.500" fill="none" stroke="currentColor" stroke-width="4.500"/>
+    <rect x="12.000" y="12.000" width="22.293" height="22.293" fill="#d7dde3"/>
+    <rect x="38.853" y="12.000" width="22.293" height="22.293" fill="#b3bdc7"/>
+    <rect x="65.707" y="12.000" width="22.293" height="22.293" fill="#8b97a4"/>
+    <rect x="12.000" y="38.853" width="22.293" height="22.293" fill="#b3bdc7"/>
+    <rect x="38.853" y="38.853" width="22.293" height="22.293" fill="var(--adi-accent, #fbc441)"/>
+    <rect x="65.707" y="38.853" width="22.293" height="22.293" fill="#636f7d"/>
+    <rect x="12.000" y="65.707" width="22.293" height="22.293" fill="#8b97a4"/>
+    <rect x="38.853" y="65.707" width="22.293" height="22.293" fill="#636f7d"/>
+    <rect x="65.707" y="65.707" width="22.293" height="22.293" fill="#424b56"/>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="ADI">
+  <title>ADI — Annual Deprivation Index</title>
+  <rect x="2.250" y="2.250" width="95.500" height="95.500" fill="none" stroke="currentColor" stroke-width="4.500"/>
+    <rect x="13.500" y="13.500" width="15.239" height="15.239" fill="#d7dde3"/>
+    <rect x="32.754" y="13.500" width="15.239" height="15.239" fill="#b3bdc7"/>
+    <rect x="52.008" y="13.500" width="15.239" height="15.239" fill="#b3bdc7"/>
+    <rect x="71.261" y="13.500" width="15.239" height="15.239" fill="#8b97a4"/>
+    <rect x="13.500" y="32.754" width="15.239" height="15.239" fill="#b3bdc7"/>
+    <rect x="32.754" y="32.754" width="15.239" height="15.239" fill="#b3bdc7"/>
+    <rect x="52.008" y="32.754" width="15.239" height="15.239" fill="var(--adi-accent, #fbc441)"/>
+    <rect x="71.261" y="32.754" width="15.239" height="15.239" fill="#636f7d"/>
+    <rect x="13.500" y="52.008" width="15.239" height="15.239" fill="#b3bdc7"/>
+    <rect x="32.754" y="52.008" width="15.239" height="15.239" fill="var(--adi-accent, #fbc441)"/>
+    <rect x="52.008" y="52.008" width="15.239" height="15.239" fill="#636f7d"/>
+    <rect x="71.261" y="52.008" width="15.239" height="15.239" fill="#636f7d"/>
+    <rect x="13.500" y="71.261" width="15.239" height="15.239" fill="#8b97a4"/>
+    <rect x="32.754" y="71.261" width="15.239" height="15.239" fill="#636f7d"/>
+    <rect x="52.008" y="71.261" width="15.239" height="15.239" fill="#636f7d"/>
+    <rect x="71.261" y="71.261" width="15.239" height="15.239" fill="#424b56"/>
+</svg>

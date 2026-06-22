@@ -85,9 +85,22 @@ dmypy.json
 # Documentation builds
 _docs/
 _build/
-site/
 
 # OS files
 .DS_Store
 Thumbs.db
 _dev/
+
+# ADI website — track source, ignore generated artifacts
+site/node_modules/
+site/build/
+site/.svelte-kit/
+site/scripts/.geo_tmp/
+site/static/data/
+site/static/tiles/
+site/static/geo/
+site/static/brand/
+site/static/favicon.svg
+site/static/favicon-16.png
+site/static/favicon-32.png
+site/static/apple-touch-icon-180.png

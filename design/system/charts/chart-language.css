@@ -1,0 +1,35 @@
+/* =============================================================================
+   ADI — chart colour language
+   Maps the token ramps (tokens.css) onto chart roles. Import tokens.css first.
+   Tufte idiom: high data-ink, no chartjunk, data leads, restrained accent.
+   ============================================================================= */
+
+:root {
+  /* Series colours for line/bar charts (categorical, restrained).
+     Order chosen for contrast on white; ink first so a single series reads as
+     plain ink. Golden reserved for the HIGHLIGHTED / selected series only.   */
+  --series-1: var(--ink);          /* #333 — primary / default series        */
+  --series-2: #5b7a8c;             /* muted steel blue                       */
+  --series-3: #9c4a22;             /* rust (shared with diverging +)         */
+  --series-4: #2f7d6f;             /* teal (shared with diverging −)         */
+  --series-5: var(--grey-1);       /* #898989 — context / background series  */
+
+  --series-highlight: var(--accent);        /* the one selected line/bar     */
+  --series-context:   var(--grey-2);         /* de-emphasised small-multiples */
+
+  /* Chart furniture — kept faint (data-ink first). */
+  --axis-line:   var(--grey-2);
+  --axis-text:   var(--grey-1);
+  --gridline:    var(--grey-3);
+  --annotation:  var(--ink);
+  --reference:   var(--accent-deep);   /* reference line, e.g. England mean  */
+
+  /* COVID-spike emphasis band (2019→2020) for the headline claimant chart. */
+  --spike-band:  rgba(251, 196, 65, 0.16);   /* faint golden wash            */
+  --spike-line:  var(--accent-deep);
+
+  /* Sparkline defaults */
+  --spark-line:  var(--ink);
+  --spark-area:  var(--grey-3);
+  --spark-point: var(--accent);
+}
