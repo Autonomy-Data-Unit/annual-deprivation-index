@@ -56,6 +56,7 @@
         <a class="btn btn--accent" href="{base}/explorer">Open the map explorer</a>
         <a class="btn btn--ghost" href="{base}/adi-vs-imd">How it complements the IMD</a>
       </div>
+      <p class="hero__contact">Questions or feedback? <a href="mailto:lukas@autonomy.work">lukas@autonomy.work</a></p>
     </div>
     <div class="hero__stats">
       <div class="stat">
@@ -166,6 +167,8 @@
   .hero__grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: var(--sp-6); align-items: center; }
   .hero h1 { font-size: clamp(2rem, 4vw, 3rem); }
   .hero__cta { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-4); }
+  .hero__contact { margin-top: var(--sp-3); font-size: var(--fs-1); color: var(--grey-1); }
+  .hero__contact a { color: var(--ink); }
   .hero__stats { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
   .stat { background: var(--paper); border: var(--border-card); border-left: 3px solid var(--accent); padding: var(--sp-3); }
   .stat__num { font-family: var(--font-serif); font-weight: 700; font-size: var(--fs-5); color: var(--ink); line-height: 1.1; }
