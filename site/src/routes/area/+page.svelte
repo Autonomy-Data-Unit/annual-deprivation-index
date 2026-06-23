@@ -176,7 +176,7 @@
 
     <div class="actions">
       <a class="btn btn--ghost" href="{base}/compare?a={level}:{code}">Compare this area →</a>
-      <a class="btn btn--ghost" href="{base}/explorer?level={level}&domain=employment">See on map →</a>
+      <a class="btn btn--ghost" href="{base}/explorer?level={level === 'england' ? 'region' : level}&domain=employment">See on map →</a>
     </div>
 
     <!-- drill down -->

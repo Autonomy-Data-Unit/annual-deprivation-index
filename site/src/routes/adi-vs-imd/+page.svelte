@@ -98,7 +98,7 @@
         <p>The ADI counts raw police-recorded incidents across all 14 street-crime types; the IMD models a rate from four. Different recording and modelling choices open a gap — useful divergence, not error.</p>
       {:else}
         <h4>Health — weak (r≈{corr[2019].health.toFixed(2)})</h4>
-        <p>The ADI's GP-recorded disease prevalence captures a different construct from the IMD Health domain (premature mortality, hospital admissions, disability). The weak correlation is the point: the two are <strong>complementary</strong>, not redundant — the ADI surfaces chronic primary-care disease burden the IMD doesn't.</p>
+        <p>The ADI's GP-recorded disease prevalence captures a different construct from the IMD Health domain (premature mortality, hospital admissions, disability). The weak correlation is the point: the two datasets are <strong>complementary but not redundant</strong>. The ADI surfaces chronic primary-care disease burden whereas the IMD doesn't.</p>
       {/if}
       <table class="data-table mini">
         <thead><tr><th>IMD edition</th><th class="num">Employment</th><th class="num">Crime</th><th class="num">Health</th></tr></thead>

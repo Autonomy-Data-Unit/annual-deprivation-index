@@ -65,7 +65,7 @@
 <div class="container section">
   <p class="eyebrow">2014–2025</p>
   <h1>Twelve years of deprivation</h1>
-  <p class="lead measure">The ADI's annual cadence turns deprivation into a moving picture — most starkly the COVID-19 employment shock of 2020, which the IMD's five-yearly snapshots entirely missed.</p>
+  <p class="lead measure">The ADI's annual cadence allows us to look at deprivation over time in a more granular way. The most stark example is the COVID-19 employment shock of 2020, which the IMD's five-yearly snapshots entirely missed.</p>
 
   {#if dash}
     <!-- national trends -->

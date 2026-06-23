@@ -28,8 +28,11 @@
     mani = await loadManifest();
     hier = await loadHier();
     const u = new URL(location.href);
-    if (u.searchParams.get('domain')) domain = u.searchParams.get('domain');
-    if (u.searchParams.get('level')) level = u.searchParams.get('level');
+    const dParam = u.searchParams.get('domain');
+    if (dParam && ['employment', 'crime', 'health'].includes(dParam)) domain = dParam;
+    // only Region/LAD/LSOA are mappable; anything else (e.g. england) falls back to LAD
+    const lParam = u.searchParams.get('level');
+    if (lParam && ['region', 'lad', 'lsoa'].includes(lParam)) level = lParam;
     year = mani.years[mani.years.length - 1];
     ensureMetric();
   });

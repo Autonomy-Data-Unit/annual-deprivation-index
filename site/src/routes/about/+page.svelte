@@ -9,7 +9,7 @@
 <div class="container section measure-wide">
   <p class="eyebrow">About</p>
   <h1>About the Annual Deprivation Index</h1>
-  <p class="lead measure">The ADI is a multi-domain measure of deprivation in England, published annually for 2014–2025 at four geographic levels. It is a product of the <a href="https://autonomy.work/adu/" target="_blank" rel="noopener">Autonomy Data Unit</a> at the <a href="https://autonomy.work/" target="_blank" rel="noopener">Autonomy Institute</a>.</p>
+  <p class="lead measure">The ADI is a multi-domain measure of deprivation in England, published annually for 2014–2025 at four geographic levels. It is a product of the <a href="https://autonomy.work/adu/" target="_blank" rel="noopener">Autonomy Data Unit</a> at the <a href="https://autonomy.work/" target="_blank" rel="noopener">Autonomy Institute</a>, with contributions from Rob Calvert Jump.</p>
 
   <h2>The three domains</h2>
   <div class="doms">

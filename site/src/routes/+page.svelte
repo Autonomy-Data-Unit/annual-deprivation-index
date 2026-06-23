@@ -149,12 +149,12 @@
       </table>
     </div>
     <div class="card card--imd">
-      <p class="eyebrow">Why the ADI exists</p>
+      <p class="eyebrow">ADI's contribution</p>
       <h3 class="card__title">Absolute, not just relative</h3>
       <p>
         Between 2015 and 2019, <strong>43% of local authorities</strong> saw their IMD ranking
-        "improve" while their actual claimant rate <em>rose</em> — they only improved relative to
-        areas that worsened faster. The ADI makes that hidden deterioration visible.
+        "improve" while their actual claimant rate <em>rose</em>: they only improved relative to
+        areas that worsened faster. The ADI makes that deterioration visible to policymakers.
       </p>
       <a class="btn btn--ghost" href="{base}/adi-vs-imd">See how the ADI complements the IMD →</a>
     </div>
