@@ -55,6 +55,7 @@
       <div class="hero__cta">
         <a class="btn btn--accent" href="{base}/explorer">Open the map explorer</a>
         <a class="btn btn--ghost" href="{base}/adi-vs-imd">How it complements the IMD</a>
+        <a class="btn btn--ghost" href="{base}/annual-deprivation-index-paper.pdf" target="_blank" rel="noopener">Read the paper (PDF)</a>
       </div>
       <p class="hero__contact">Questions or feedback? <a href="mailto:lukas@autonomy.work">lukas@autonomy.work</a></p>
     </div>

@@ -48,6 +48,12 @@
   </ul>
   <p class="muted small">All data-quality corrections are surfaced by an automated validator that runs over the raw outputs; see the pipeline repository.</p>
 
+  <h2>The paper</h2>
+  <p class="measure">The methodology behind the ADI is set out in full in the paper <em>“An annual deprivation index for neighbourhoods in England”</em> — Lukas Kikuchi, Robert Calvert Jump, Jo Michell &amp; Will Stronge (2024).</p>
+  <p>
+    <a class="btn btn--accent" href="{base}/annual-deprivation-index-paper.pdf" target="_blank" rel="noopener">Download the paper (PDF) ↓</a>
+  </p>
+
   <h2>Data &amp; reproducibility</h2>
   <p class="measure">The full pipeline — fetch, process and aggregate — is open source and reproducible end to end. All sources are public; no API keys are required.</p>
   <p>
