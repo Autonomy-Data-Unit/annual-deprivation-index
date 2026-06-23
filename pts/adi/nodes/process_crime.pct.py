@@ -72,6 +72,28 @@ print(f"process_crime: years {year_start}-{year_end}")
 
 # %%
 #|export
+def _build_lsoa21_to_lsoa11_remap() -> dict:
+    """Map LSOA 2021 codes that don't exist in the LSOA 2011 universe back to their
+    LSOA 2011 parent.
+
+    From ~2024 onward data.police.uk codes incidents in split/merged areas with the
+    new LSOA 2021 codes (e.g. ``E01033911``) rather than the LSOA 2011 codes. The rest
+    of this node, and the downstream aggregate crosswalk, work in LSOA 2011 vintage, so
+    those codes would otherwise be silently dropped by the population left-join below
+    (470k incidents / 8.7% of 2025 street crime), leaving the affected LSOAs with a
+    spurious zero. Mapping each new code to its LSOA 2011 parent (splits: child->parent
+    1:1; merges: any one parent, re-summed identically at aggregate) recovers them.
+    """
+    xw = pd.read_csv(const.crosswalk_path / "lsoa11_to_lsoa21.csv", dtype=str)
+    c11 = set(xw["LSOA11CD"].dropna())
+    only21 = xw[~xw["LSOA21CD"].isin(c11)].drop_duplicates("LSOA21CD")
+    return dict(zip(only21["LSOA21CD"], only21["LSOA11CD"]))
+
+_lsoa21_to_lsoa11 = _build_lsoa21_to_lsoa11_remap()
+print(f"  loaded {len(_lsoa21_to_lsoa11)} LSOA21->LSOA11 code remappings (recent police.uk vintage)")
+
+# %%
+#|export
 def _load_population(year: int) -> pd.DataFrame:
     """Load LSOA 2011 population for a given year, falling back to 2020."""
     for try_year in [year, 2020]:
@@ -116,6 +138,10 @@ for year in range(year_start, year_end + 1):
 
     # Drop rows with no LSOA
     df = df.dropna(subset=["LSOA code"])
+
+    # Normalise recent LSOA 2021 codes back to their LSOA 2011 parent so they survive
+    # the LSOA 2011 population join below instead of being silently dropped.
+    df["LSOA code"] = df["LSOA code"].map(_lsoa21_to_lsoa11).fillna(df["LSOA code"])
 
     # Filter out Welsh LSOAs
     df = df[~df["LSOA code"].str.startswith("W")]

@@ -581,7 +581,10 @@ def adi_lsoa_year(year):
         columns={"code": "LSOA21CD"})
     cr = data["lsoa"]["crime"][year].reset_index()
     count_cols = [t[0] for t in CRIME_TYPES if t[0] in cr.columns]
-    cr["adi_crime_rate"] = cr[count_cols].sum(axis=1) / cr["pop"].replace(0, np.nan)
+    # min_count=1 so all-NaN rows (e.g. nulled Greater Manchester reporting gaps) stay NaN
+    # rather than collapsing to 0 and tying at the worst rank. Matches metric_series_for_level.
+    crime_total = cr[count_cols].sum(axis=1, min_count=1)
+    cr["adi_crime_rate"] = crime_total / cr["pop"].replace(0, np.nan)
     cr = cr[["code", "adi_crime_rate"]].rename(columns={"code": "LSOA21CD"})
     m = cc.merge(cr, on="LSOA21CD", how="inner").rename(columns={"claimant_count_rate": "adi_claimant_rate"})
     he = data["lsoa"]["health"].get(year)
