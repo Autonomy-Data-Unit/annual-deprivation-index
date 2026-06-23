@@ -629,51 +629,68 @@ if "adi_dep_rank" in m25.columns:
     scatter["health"] = [[rnd(a, 1), rnd(b, 1)] for a, b in zip(samp["adi_dep_rank"], samp["imd_health_rank"]) if pd.notna(a) and pd.notna(b)]
 n_lsoa_scatter = int(len(m25))
 
-# LAD contradictions 2015->2019 (ported)
+# ---- LAD + LSOA "relative-improves-but-absolute-worsens" contradictions ----
+# Computed for BOTH consecutive IMD pairs: 2015->2019 and the latest 2019->2025.
 imd15r = imd15.rename(columns={"lsoa_code": "LSOA11CD", "imd_rank": "imd_rank_15"})
 imd19r = pd.read_csv(IMD_DIR / "imd_2019.csv").rename(columns={
     "LSOA code (2011)": "LSOA11CD",
-    "Local Authority District code (2019)": "lad_code",
     "Local Authority District name (2019)": "lad_name",
     "Index of Multiple Deprivation (IMD) Rank (where 1 is most deprived)": "imd_rank_19"})
-imd_merged = imd15r[["LSOA11CD", "imd_rank_15"]].merge(
-    imd19r[["LSOA11CD", "lad_code", "lad_name", "imd_rank_19"]], on="LSOA11CD")
-imd_lad = imd_merged.groupby(["lad_code", "lad_name"]).agg(
-    mean_rank_15=("imd_rank_15", "mean"), mean_rank_19=("imd_rank_19", "mean")).reset_index()
-imd_lad["lad_rank_15"] = imd_lad["mean_rank_15"].rank()
-imd_lad["lad_rank_19"] = imd_lad["mean_rank_19"].rank()
-imd_lad["imd_rank_change"] = imd_lad["lad_rank_19"] - imd_lad["lad_rank_15"]
+imd25r = pd.read_csv(IMD_DIR / "imd_2025.csv").rename(columns={
+    "LSOA code (2021)": "LSOA21CD",
+    "Local Authority District name (2024)": "lad_name",
+    "Index of Multiple Deprivation (IMD) Rank (where 1 is most deprived)": "imd_rank_25"})
 
-cc15 = data["lad"]["employment"][2015].reset_index()[["name", "claimant_count_rate"]].rename(columns={"claimant_count_rate": "cc_15"})
-cc19 = data["lad"]["employment"][2019].reset_index()[["name", "claimant_count_rate"]].rename(columns={"claimant_count_rate": "cc_19"})
-ladc = imd_lad.merge(cc15, left_on="lad_name", right_on="name", how="inner").merge(cc19, on="name", how="inner")
-ladc["cc_change"] = ladc["cc_19"] - ladc["cc_15"]
-ladc["contradiction"] = (ladc["imd_rank_change"] > 0) & (ladc["cc_change"] > 0)
-n_contra = int(ladc["contradiction"].sum())
+# map LAD name -> LAD25 code (for linking to area pages)
+lad_code_by_name = {r["name"]: c for c, r in data["lad"]["employment"][YEARS[-1]].iterrows()}
 
-contradictions = {
-    "n_total": int(len(ladc)),
-    "n_contradiction": n_contra,
-    "pct": round(n_contra / len(ladc) * 100),
-    "lads": [
-        {"code": r["lad_code"], "name": r["lad_name"],
-         "imd_rank_change": rnd(r["imd_rank_change"], 0),
-         "cc_change_pp": rnd(r["cc_change"] * 100, 2),
+def _lad_contradictions(merged, rank_e, rank_l, cc_e_yr, cc_l_yr):
+    g = merged.groupby("lad_name").agg(re=(rank_e, "mean"), rl=(rank_l, "mean")).reset_index()
+    g["imd_rank_change"] = g["rl"].rank() - g["re"].rank()
+    cce = data["lad"]["employment"][cc_e_yr].reset_index()[["name", "claimant_count_rate"]].rename(columns={"claimant_count_rate": "cc_e"})
+    ccl = data["lad"]["employment"][cc_l_yr].reset_index()[["name", "claimant_count_rate"]].rename(columns={"claimant_count_rate": "cc_l"})
+    g = g.merge(cce, left_on="lad_name", right_on="name", how="inner").merge(ccl, on="name", how="inner")
+    g["cc_change"] = g["cc_l"] - g["cc_e"]
+    g["contradiction"] = (g["imd_rank_change"] > 0) & (g["cc_change"] > 0)
+    n = int(g["contradiction"].sum())
+    return n, len(g), [
+        {"code": lad_code_by_name.get(r["lad_name"]), "name": r["lad_name"],
+         "imd_rank_change": rnd(r["imd_rank_change"], 0), "cc_change_pp": rnd(r["cc_change"] * 100, 2),
          "contradiction": bool(r["contradiction"])}
-        for _, r in ladc.sort_values("cc_change", ascending=False).iterrows()
-    ],
-}
+        for _, r in g.sort_values("cc_change", ascending=False).iterrows()]
 
-# LSOA major contradictions count
-imd_lsoa = imd15r[["LSOA11CD", "imd_rank_15"]].merge(
-    imd19r[["LSOA11CD", "imd_rank_19"]], on="LSOA11CD")
-imd_lsoa["imd_change"] = imd_lsoa["imd_rank_19"] - imd_lsoa["imd_rank_15"]
-imd_lsoa = imd_lsoa.merge(xw_u, on="LSOA11CD")
-a15 = data["lsoa"]["employment"][2015].reset_index()[["code", "claimant_count_rate"]].rename(columns={"code": "LSOA21CD", "claimant_count_rate": "cc_15"})
-a19 = data["lsoa"]["employment"][2019].reset_index()[["code", "claimant_count_rate"]].rename(columns={"code": "LSOA21CD", "claimant_count_rate": "cc_19"})
-lsoa_c = imd_lsoa.merge(a15, on="LSOA21CD").merge(a19, on="LSOA21CD")
-lsoa_c["cc_change"] = lsoa_c["cc_19"] - lsoa_c["cc_15"]
-n_major = int(((lsoa_c["imd_change"] > 500) & (lsoa_c["cc_change"] > 0.01)).sum())
+def _lsoa_major(merged21, rank_e, rank_l, cc_e_yr, cc_l_yr):
+    m = merged21.copy()
+    m["imd_change"] = m[rank_l] - m[rank_e]
+    ae = data["lsoa"]["employment"][cc_e_yr].reset_index()[["code", "claimant_count_rate"]].rename(columns={"code": "LSOA21CD", "claimant_count_rate": "cc_e"})
+    al = data["lsoa"]["employment"][cc_l_yr].reset_index()[["code", "claimant_count_rate"]].rename(columns={"code": "LSOA21CD", "claimant_count_rate": "cc_l"})
+    m = m.merge(ae, on="LSOA21CD").merge(al, on="LSOA21CD")
+    m["cc_change"] = m["cc_l"] - m["cc_e"]
+    return int(((m["imd_change"] > 500) & (m["cc_change"] > 0.01)).sum())
+
+# LSOA-2021 rank tables per IMD edition (2015/2019 via crosswalk; 2025 native)
+imd15_21 = imd15r[["LSOA11CD", "imd_rank_15"]].merge(xw_u, on="LSOA11CD")[["LSOA21CD", "imd_rank_15"]]
+imd19_21 = imd19r[["LSOA11CD", "imd_rank_19", "lad_name"]].merge(xw_u, on="LSOA11CD")[["LSOA21CD", "imd_rank_19", "lad_name"]]
+imd25_21 = imd25r[["LSOA21CD", "imd_rank_25", "lad_name"]]
+
+def _period(rank_e_df, rank_e, name_join_late, rank_l_df, rank_l, cc_e_yr, cc_l_yr, on_lsoa, lad_from):
+    lad_merged = on_lsoa.copy()
+    n, tot, lads = _lad_contradictions(lad_merged, rank_e, rank_l, cc_e_yr, cc_l_yr)
+    major = _lsoa_major(on_lsoa, rank_e, rank_l, cc_e_yr, cc_l_yr)
+    return {"n_total": tot, "n_contradiction": n, "pct": round(n / tot * 100) if tot else 0,
+            "lads": lads, "lsoa_major": major, "early": cc_e_yr, "late": cc_l_yr}
+
+# 2015->2019: both LSOA11, joined directly, LAD from imd19
+m1519 = imd15r[["LSOA11CD", "imd_rank_15"]].merge(imd19r[["LSOA11CD", "imd_rank_19", "lad_name"]], on="LSOA11CD")
+m1519_21 = m1519.merge(xw_u, on="LSOA11CD")[["LSOA21CD", "imd_rank_15", "imd_rank_19", "lad_name"]]
+c1519 = _period(None, "imd_rank_15", None, None, "imd_rank_19", 2015, 2019, m1519_21, "lad_name")
+# 2019->2025: 2019 via crosswalk to LSOA21, joined to native 2025, LAD from imd25
+m1925 = imd19_21[["LSOA21CD", "imd_rank_19"]].merge(imd25_21, on="LSOA21CD")
+c1925 = _period(None, "imd_rank_19", None, None, "imd_rank_25", 2019, YEARS[-1], m1925, "lad_name")
+
+contradictions = c1519  # back-compat default
+contradictions_periods = {"2015_2019": c1519, "2019_2025": c1925}
+n_major = c1519["lsoa_major"]
 
 imd_out = {
     "correlations": {"2015": corr15, "2019": corr19, "2025": corr25},
@@ -684,12 +701,13 @@ imd_out = {
     "scatter": scatter,
     "scatter_n": n_lsoa_scatter,
     "contradictions": contradictions,
+    "contradictions_periods": contradictions_periods,
     "lsoa_major_contradictions": n_major,
 }
 write_json(WEB / "imd.json", imd_out)
 
 print("\nDONE. Summary:")
 print(f"  correlations 2019: {corr19}")
-print(f"  LAD contradictions: {n_contra}/{len(ladc)} ({contradictions['pct']}%)")
+print(f"  LAD contradictions 2015-19: {c1519['n_contradiction']}/{c1519['n_total']} ({c1519['pct']}%); 2019-25: {c1925['n_contradiction']}/{c1925['n_total']} ({c1925['pct']}%)")
 print(f"  LSOA major contradictions: {n_major}")
 print(f"  COVID national: {imd_out['covid']}")

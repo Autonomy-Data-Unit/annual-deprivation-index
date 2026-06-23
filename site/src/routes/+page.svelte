@@ -37,8 +37,8 @@
 </script>
 
 <svelte:head>
-  <title>ADI — Annual Deprivation Index for England</title>
-  <meta name="description" content="An annual, absolute measure of deprivation across England — employment, crime and health — at neighbourhood, local-authority, regional and national level, 2014–2025. A product of the Autonomy Data Unit." />
+  <title>ADI: the Annual Deprivation Index for England</title>
+  <meta name="description" content="An annual, absolute measure of deprivation across England covering employment, crime and health, at neighbourhood, local-authority, regional and national level, from 2014 to 2025. A product of the Autonomy Data Unit." />
 </svelte:head>
 
 <!-- Hero -->
@@ -49,7 +49,7 @@
       <h1>Deprivation across England,<br />measured every year.</h1>
       <p class="lead measure">
         The Annual Deprivation Index tracks <strong>absolute</strong> rates of deprivation across three
-        domains — employment, crime and health — every year from 2014 to 2025, at four geographic levels.
+        domains (employment, crime and health) every year from 2014 to 2025, at four geographic levels.
         It complements the government's Index of Multiple Deprivation, which ranks areas only every few years.
       </p>
       <div class="hero__cta">
@@ -85,16 +85,16 @@
   <div class="grid two">
     <div class="card">
       <p class="eyebrow">Employment · England</p>
-      <h3 class="card__title">A decade of claimant rates — and the pandemic shock the IMD missed</h3>
+      <h3 class="card__title">A decade of claimant rates, and the pandemic shock the IMD missed</h3>
       <LineChart
         x={years}
         series={[{ label: 'Claimant rate', color: 'var(--domain-employment)', values: claimant.values }]}
         yFormat={(v) => (v * 100).toFixed(0) + '%'}
         yZero
-        markers={[{ x: 2020, label: 'COVID-19', color: '#9c4a22' }, { x: 2015, label: 'IMD 2015', color: 'var(--grey-2)' }, { x: 2019, label: 'IMD 2019', color: 'var(--grey-2)' }]}
+        markers={[{ x: 2020, label: 'COVID-19', color: '#9c4a22' }, { x: 2015, label: 'IMD 2015', color: 'var(--grey-2)' }, { x: 2019, label: 'IMD 2019', color: 'var(--grey-2)' }, { x: 2025, label: 'IMD 2025', color: 'var(--grey-2)' }]}
         showLegend={false}
       />
-      <p class="muted small">Universal Credit claimant rate, England. The IMD published just two snapshots (2015, 2019) across this period.</p>
+      <p class="muted small">Universal Credit claimant rate, England. The IMD published three snapshots (2015, 2019, 2025) across this period.</p>
     </div>
     <div class="card">
       <p class="eyebrow">Employment · {dash.latest_year}</p>
@@ -116,7 +116,7 @@
   <p class="eyebrow">Three domains</p>
   <div class="grid three">
     {#each [
-      { d: 'employment', title: 'Employment', desc: 'Universal Credit claimant counts from Nomis — who is out of work and claiming support.', series: claimant.values, fmt: (v) => (v*100).toFixed(0)+'%' },
+      { d: 'employment', title: 'Employment', desc: 'Universal Credit claimant counts from Nomis: who is out of work and claiming support.', series: claimant.values, fmt: (v) => (v*100).toFixed(0)+'%' },
       { d: 'crime', title: 'Crime', desc: 'Police-recorded street crime across 14 categories from data.police.uk.', series: crime.values, fmt: (v) => (v*1000).toFixed(0) },
       { d: 'health', title: 'Health', desc: 'GP-recorded disease prevalence across 24 conditions, from the NHS QOF.', series: dep.values, fmt: (v) => (v*100).toFixed(0)+'%' }
     ] as c}

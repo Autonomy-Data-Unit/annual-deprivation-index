@@ -89,12 +89,12 @@
   function fmtMetric(v){ return fmtValue(v, metricDef?.fmt || 'pct'); }
 </script>
 
-<svelte:head><title>Compare areas — ADI</title></svelte:head>
+<svelte:head><title>Compare areas · ADI</title></svelte:head>
 
 <div class="container section">
   <p class="eyebrow">Side by side</p>
   <h1>Compare areas</h1>
-  <p class="lead measure">Pick up to four areas — any mix of regions, local authorities and neighbourhoods — and compare them across employment, crime and health, over time.</p>
+  <p class="lead measure">Pick up to four areas (any mix of regions, local authorities and neighbourhoods) and compare them across employment, crime and health, over time.</p>
 
   <!-- selected chips + picker -->
   <div class="picker card">
@@ -147,7 +147,7 @@
 
     <!-- latest-year snapshot table -->
     <div class="card">
-      <h4 class="card__title">Snapshot — {years[yi]}</h4>
+      <h4 class="card__title">Snapshot · {years[yi]}</h4>
       <table class="data-table">
         <thead><tr><th>Area</th><th class="num">Claimant rate</th><th class="num">All crime /1k</th><th class="num">Depression</th><th class="num">Population</th></tr></thead>
         <tbody>

@@ -66,7 +66,7 @@
   });
 </script>
 
-<svelte:head><title>Explorer — ADI map of England</title></svelte:head>
+<svelte:head><title>Explorer: ADI map of England</title></svelte:head>
 
 <div class="explorer">
   <!-- controls -->
@@ -102,7 +102,7 @@
       </div>
 
       <div class="field">
-        <label class="field__lbl" for="year">Year — <strong class="num">{year}</strong></label>
+        <label class="field__lbl" for="year">Year: <strong class="num">{year}</strong></label>
         <input id="year" type="range" min={mani.years[0]} max={mani.years[mani.years.length-1]} step="1" bind:value={year} />
         <div class="yticks"><span>{mani.years[0]}</span><span>{mani.years[mani.years.length-1]}</span></div>
       </div>
@@ -134,7 +134,7 @@
       </div>
       {#if detailSeries}
         <Sparkline values={detailSeries} color={DOMAIN_HUES[domain]} width={260} height={48} fill />
-        <p class="muted tiny">{mani.years[0]}–{mani.years[mani.years.length-1]}</p>
+        <p class="muted tiny">{mani.years[0]} to {mani.years[mani.years.length-1]}</p>
       {/if}
 
       <!-- domain snapshot -->

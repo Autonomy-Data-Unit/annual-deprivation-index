@@ -8,7 +8,11 @@
   let imd = $state(null), mani = $state(null);
   let corrTab = $state('employment');
   let sortKey = $state('cc'); // cc | imd
+  let period = $state('2019_2025'); // which IMD pair: 2015_2019 | 2019_2025
   let hover = $state(null);
+
+  const periodLabels = { '2015_2019': '2015 to 2019', '2019_2025': '2019 to 2025' };
+  const contra = $derived(imd ? imd.contradictions_periods[period] : null);
 
   onMount(async () => { imd = await imdData(); mani = await loadManifest(); });
 
@@ -21,12 +25,12 @@
   };
   function strengthWord(r) {
     const a = Math.abs(r);
-    if (a >= 0.8) return 'Strong'; if (a >= 0.6) return 'Moderate'; if (a >= 0.4) return 'Weak–moderate'; if (a >= 0.2) return 'Weak'; return 'Negligible';
+    if (a >= 0.8) return 'Strong'; if (a >= 0.6) return 'Moderate'; if (a >= 0.4) return 'Weak to moderate'; if (a >= 0.2) return 'Weak'; return 'Negligible';
   }
 
   // contradictions scatter geometry
   const W = 720, H = 420, P = { t: 16, r: 16, b: 44, l: 56 };
-  const lads = $derived(imd?.contradictions.lads ?? []);
+  const lads = $derived(contra?.lads ?? []);
   const xExtent = $derived.by(() => { const xs = lads.map(d=>d.imd_rank_change); return Math.max(Math.abs(Math.min(...xs,0)), Math.abs(Math.max(...xs,0)), 1); });
   const yExtent = $derived.by(() => { const ys = lads.map(d=>d.cc_change_pp); return Math.max(Math.abs(Math.min(...ys,0)), Math.abs(Math.max(...ys,0)), 1); });
   const sx = $derived((v) => P.l + ((v + xExtent) / (2*xExtent)) * (W - P.l - P.r));
@@ -41,12 +45,12 @@
   const contradictionLads = $derived(sortedLads.filter(d=>d.contradiction));
 </script>
 
-<svelte:head><title>ADI vs IMD — how the ADI complements the Index of Multiple Deprivation</title></svelte:head>
+<svelte:head><title>ADI vs IMD: how the ADI complements the Index of Multiple Deprivation</title></svelte:head>
 
 <div class="container section measure-wide">
   <p class="eyebrow">Method &amp; comparison</p>
   <h1>How the ADI complements the IMD</h1>
-  <p class="lead measure">The government's <a href="https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" target="_blank" rel="noopener">Index of Multiple Deprivation</a> is the definitive map of relative deprivation in England. The ADI doesn't replace it — it fills the gaps it structurally can't cover: <strong>annual</strong> tracking, <strong>absolute</strong> levels, and real-time shock detection.</p>
+  <p class="lead measure">The government's <a href="https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019" target="_blank" rel="noopener">Index of Multiple Deprivation</a> is the definitive map of relative deprivation in England. The ADI doesn't replace it. It fills gaps the IMD can't: annual tracking, absolute levels, and shocks caught as they happen.</p>
 </div>
 
 {#if imd && mani}
@@ -57,10 +61,10 @@
     <table class="data-table cmp__t">
       <thead><tr><th></th><th>IMD (Indices of Deprivation)</th><th>ADI (Annual Deprivation Index)</th></tr></thead>
       <tbody>
-        <tr><th>Domains</th><td>7 — income, employment, education, health, crime, housing, living environment</td><td>3 — employment, crime, health</td></tr>
+        <tr><th>Domains</th><td>7: income, employment, education, health, crime, housing, living environment</td><td>3: employment, crime, health</td></tr>
         <tr><th>Measure</th><td>Relative <strong>rank</strong> (1 = most deprived)</td><td>Absolute <strong>rate</strong> (e.g. % claiming)</td></tr>
-        <tr><th>Cadence</th><td>Every ~5 years (2015, 2019, 2025)</td><td>Every year (2014–2025)</td></tr>
-        <tr><th>Data points / decade</th><td>~2</td><td>11</td></tr>
+        <tr><th>Cadence</th><td>Every ~5 years (2015, 2019, 2025)</td><td>Every year (2014 to 2025)</td></tr>
+        <tr><th>Data points / decade</th><td>~2</td><td>12</td></tr>
         <tr><th>Captures shocks?</th><td>Only at the next edition</td><td>Within the year</td></tr>
         <tr><th>Best for</th><td>Comparing & ranking areas; funding allocation</td><td>Tracking change over time; absolute levels</td></tr>
       </tbody>
@@ -70,7 +74,7 @@
 
 <!-- (b) correlation -->
 <section class="container section--tight measure-wide">
-  <h2><span class="sec">b</span> Where they agree — and don't</h2>
+  <h2><span class="sec">b</span> Where they agree, and where they don't</h2>
   <p class="measure">At neighbourhood level, the ADI's domains line up with the IMD's to differing degrees. We rank-correlate (Spearman) each ADI domain against the matching IMD domain, across {imd.correlations[2019].n.toLocaleString('en-GB')} neighbourhoods.</p>
 
   <div class="corr-cards">
@@ -91,13 +95,13 @@
     </div>
     <div class="corr-text">
       {#if corrTab==='employment'}
-        <h4>Employment — strong (r≈{corr[2019].employment.toFixed(2)})</h4>
-        <p>The ADI's Universal Credit claimant rate is a strong proxy for the IMD's Employment domain. Both capture worklessness, through different lenses — actual UC claims vs modelled unemployment and incapacity benefits.</p>
+        <h4>Employment: strong (r≈{corr[2019].employment.toFixed(2)})</h4>
+        <p>The ADI's Universal Credit claimant rate is a strong proxy for the IMD's Employment domain. Both capture worklessness, through different lenses: actual UC claims versus modelled unemployment and incapacity benefits.</p>
       {:else if corrTab==='crime'}
-        <h4>Crime — moderate (r≈{corr[2019].crime.toFixed(2)})</h4>
-        <p>The ADI counts raw police-recorded incidents across all 14 street-crime types; the IMD models a rate from four. Different recording and modelling choices open a gap — useful divergence, not error.</p>
+        <h4>Crime: moderate (r≈{corr[2019].crime.toFixed(2)})</h4>
+        <p>The ADI counts raw police-recorded incidents across all 14 street-crime types; the IMD models a rate from four. Different recording and modelling choices open a gap. That divergence is useful, not error.</p>
       {:else}
-        <h4>Health — weak (r≈{corr[2019].health.toFixed(2)})</h4>
+        <h4>Health: weak (r≈{corr[2019].health.toFixed(2)})</h4>
         <p>The ADI's GP-recorded disease prevalence captures a different construct from the IMD Health domain (premature mortality, hospital admissions, disability). The weak correlation is the point: the two datasets are <strong>complementary but not redundant</strong>. The ADI surfaces chronic primary-care disease burden whereas the IMD doesn't.</p>
       {/if}
       <table class="data-table mini">
@@ -116,7 +120,12 @@
 <!-- (c) absolute vs relative -->
 <section class="container section--tight measure-wide">
   <h2><span class="sec">c</span> The absolute-vs-relative problem</h2>
-  <p class="measure">Because the IMD is <em>relative</em>, an area can climb the rankings even as its deprivation worsens — if other areas worsen faster. Between 2015 and 2019, <strong>{imd.contradictions.pct}% of local authorities ({imd.contradictions.n_contradiction} of {imd.contradictions.n_total})</strong> saw their IMD rank "improve" while their actual claimant rate rose.</p>
+  <p class="measure">Because the IMD is <em>relative</em>, an area can climb the rankings even as its deprivation worsens, so long as other areas worsen faster. Between {periodLabels[period]}, <strong>{contra.pct}% of local authorities ({contra.n_contradiction} of {contra.n_total})</strong> saw their IMD rank "improve" while their actual claimant rate rose.</p>
+  <div class="seg sm period-seg">
+    {#each [['2015_2019','2015 → 2019'],['2019_2025','2019 → 2025 · latest']] as [p,l]}
+      <button aria-pressed={period===p} onclick={()=>period=p}>{l}</button>
+    {/each}
+  </div>
 
   <div class="contra">
     <div class="contra__chart card">
@@ -132,7 +141,7 @@
             fill={d.contradiction ? '#9c4a22' : 'var(--seq-4)'} opacity={d.contradiction?0.85:0.5}
             onmouseenter={()=>hover=d.code} onmouseleave={()=>hover=null} role="img" aria-label={d.name}/>
         {/each}
-        <text x={(P.l+W-P.r)/2} y={H-8} text-anchor="middle" class="cs__ax">IMD rank change 2015→2019 (right = improved)</text>
+        <text x={(P.l+W-P.r)/2} y={H-8} text-anchor="middle" class="cs__ax">IMD rank change {period === '2015_2019' ? '2015→2019' : '2019→2025'} (right = improved)</text>
         <text x={16} y={(P.t+H-P.b)/2} transform="rotate(-90 16 {(P.t+H-P.b)/2})" text-anchor="middle" class="cs__ax">Claimant rate change (pp)</text>
         {#if hover}
           {@const d = lads.find(l=>l.code===hover)}
@@ -169,18 +178,18 @@
       </div>
     </div>
   </div>
-  <p class="measure muted small">At neighbourhood level the effect is larger still: <strong>{imd.lsoa_major_contradictions.toLocaleString('en-GB')} LSOAs</strong> improved 500+ IMD ranks while their claimant rate rose by a full percentage point or more.</p>
+  <p class="measure muted small">At neighbourhood level the effect is larger still: over {period === '2015_2019' ? '2015 to 2019' : '2019 to 2025'}, <strong>{contra.lsoa_major.toLocaleString('en-GB')} LSOAs</strong> improved 500+ IMD ranks while their claimant rate rose by a full percentage point or more.</p>
 </section>
 
 <!-- (d) annual resolution -->
 <section class="container section--tight measure-wide">
   <h2><span class="sec">d</span> Annual resolution catches what snapshots miss</h2>
-  <p class="measure">The ADI provides 12 annual readings where the IMD gives 2. Nowhere is that clearer than 2020: the national claimant rate jumped from {fmtPct(imd.covid.y2019)} to {fmtPct(imd.covid.y2020)} — it nearly doubled — in a single year. The IMD 2019 was already published; the next edition was 2025.</p>
+  <p class="measure">The ADI provides a reading every year; over the same span the IMD gives three (2015, 2019, 2025). Nowhere is that gap clearer than 2020: the national claimant rate jumped from {fmtPct(imd.covid.y2019)} to {fmtPct(imd.covid.y2020)} in a single year, close to doubling. The IMD 2019 was already published and the next edition didn't arrive until 2025, so the snapshots missed the shock entirely.</p>
   <div class="card">
     <LineChart x={imd.annual_trend.years} series={[{label:'National claimant rate', color:DOMAIN_HUES.employment, values:imd.annual_trend.values}]}
       yFormat={(v)=>(v*100).toFixed(0)+'%'} yZero width={860} height={300} showLegend={false}
-      markers={imd.imd_editions.filter(e=>e<=2024).map(e=>({x:e, label:'IMD '+e, color:'var(--ink)'})).concat([{x:2020,label:'COVID-19',color:'#9c4a22'}])} />
-    <p class="muted small">Black dashed lines mark the only two IMD editions in this window. The ADI fills every year between.</p>
+      markers={imd.imd_editions.map(e=>({x:e, label:'IMD '+e, color:'var(--ink)'})).concat([{x:2020,label:'COVID-19',color:'#9c4a22'}])} />
+    <p class="muted small">Black dashed lines mark the three IMD editions (2015, 2019, 2025). The ADI fills every year between.</p>
   </div>
 </section>
 
@@ -221,6 +230,7 @@
   .cs__tipn { font-size: 11px; font-weight: 600; fill: var(--ink); } .cs__tipv { font-size: 10px; fill: var(--grey-1); font-family: var(--font-mono); }
   .contra__th { display: flex; justify-content: space-between; align-items: center; }
   .seg.sm button { padding: 4px 8px; font-size: var(--fs-0); }
+  .period-seg { margin-bottom: var(--sp-4); }
   .contra__scroll { max-height: 380px; overflow-y: auto; margin-top: var(--sp-2); }
   .up { color: #1f6f6b; } .down { color: #9c4a22; }
   tr.hl { background: #fbf3ee; }

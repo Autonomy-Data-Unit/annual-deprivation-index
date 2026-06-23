@@ -108,7 +108,7 @@
   });
 </script>
 
-<svelte:head><title>{rec ? rec.name : 'Area profile'} — ADI</title></svelte:head>
+<svelte:head><title>{rec ? rec.name : 'Area profile'} · ADI</title></svelte:head>
 
 <div class="container section">
   {#if loading && !rec}
@@ -153,11 +153,11 @@
     <!-- trends -->
     <div class="grid trends">
       <div class="card">
-        <p class="eyebrow">Employment</p><h4 class="card__title">Claimant rate, {years[0]}–{years[yi]}</h4>
+        <p class="eyebrow">Employment</p><h4 class="card__title">Claimant rate, {years[0]} to {years[yi]}</h4>
         <LineChart x={years} series={[{label:'Claimant rate', color:DOMAIN_HUES.employment, values:rec.employment.rate}]} yFormat={(v)=>(v*100).toFixed(0)+'%'} yZero showLegend={false} markers={[{x:2020,label:'COVID',color:'#9c4a22'}]} />
       </div>
       <div class="card">
-        <p class="eyebrow">Crime</p><h4 class="card__title">All street crime per 1,000, {years[0]}–{years[yi]}</h4>
+        <p class="eyebrow">Crime</p><h4 class="card__title">All street crime per 1,000, {years[0]} to {years[yi]}</h4>
         <LineChart x={years} series={[{label:'All crime', color:DOMAIN_HUES.crime, values:rec.crime.total_rate.map(v=>v==null?null:v*1000)}]} yFormat={(v)=>v.toFixed(0)} yZero showLegend={false} />
       </div>
     </div>
@@ -185,7 +185,7 @@
         <p class="eyebrow">Drill down</p>
         <h4 class="card__title">
           {level === 'england' ? 'Regions' : level === 'region' ? 'Local authorities' : 'Neighbourhoods (LSOAs)'}
-          <span class="muted small">— {children.length}, ranked by claimant rate</span>
+          <span class="muted small">· {children.length}, ranked by claimant rate</span>
         </h4>
         <div class="drill__grid">
           <table class="data-table">

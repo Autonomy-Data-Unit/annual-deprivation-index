@@ -4,12 +4,12 @@
   import { DOMAIN_HUES } from '$lib/data.js';
 </script>
 
-<svelte:head><title>About &amp; methodology — ADI</title></svelte:head>
+<svelte:head><title>About & methodology · ADI</title></svelte:head>
 
 <div class="container section measure-wide">
   <p class="eyebrow">About</p>
   <h1>About the Annual Deprivation Index</h1>
-  <p class="lead measure">The ADI is a multi-domain measure of deprivation in England, published annually for 2014–2025 at four geographic levels. It is a product of the <a href="https://autonomy.work/adu/" target="_blank" rel="noopener">Autonomy Data Unit</a> at the <a href="https://autonomy.work/" target="_blank" rel="noopener">Autonomy Institute</a>, with contributions from Rob Calvert Jump.</p>
+  <p class="lead measure">The ADI is a multi-domain measure of deprivation in England, published annually for 2014 to 2025 at four geographic levels. It is a product of the <a href="https://autonomy.work/adu/" target="_blank" rel="noopener">Autonomy Data Unit</a> at the <a href="https://autonomy.work/" target="_blank" rel="noopener">Autonomy Institute</a>, with contributions from Rob Calvert Jump.</p>
 
   <h2>The three domains</h2>
   <div class="doms">
@@ -26,15 +26,15 @@
     <div class="card" style="--h:{DOMAIN_HUES.health}">
       <span class="ic"><DomainIcon domain="health" size={24} /></span>
       <h4>Health</h4>
-      <p>GP-recorded disease prevalence from the NHS <a href="https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data" target="_blank" rel="noopener">QOF</a>, mapped to neighbourhoods via GP–LSOA patient registrations across 24 conditions.</p>
+      <p>GP-recorded disease prevalence from the NHS <a href="https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data" target="_blank" rel="noopener">QOF</a>, mapped to neighbourhoods via GP-LSOA patient registrations across 24 conditions.</p>
     </div>
   </div>
 
   <h2>Geography &amp; coverage</h2>
-  <p class="measure">Outputs are produced at four levels: <strong>LSOA</strong> (~33,750 neighbourhoods), <strong>local authority district</strong> (296), <strong>region</strong> (9) and <strong>England</strong>. Domains are processed in 2011 LSOA boundaries and converted to 2021 boundaries with a population-weighted crosswalk, then rolled up. The index is <strong>not</strong> combined into a single composite score — the three domains are kept separate.</p>
+  <p class="measure">Outputs are produced at four levels: <strong>LSOA</strong> (~33,750 neighbourhoods), <strong>local authority district</strong> (296), <strong>region</strong> (9) and <strong>England</strong>. Domains are processed in 2011 LSOA boundaries and converted to 2021 boundaries with a population-weighted crosswalk, then rolled up. The index is <strong>not</strong> combined into a single composite score; the three domains are kept separate.</p>
 
   <h2>Estimating health at neighbourhood level</h2>
-  <p class="measure">QOF disease registers are published per GP practice, not per neighbourhood. We estimate each LSOA's prevalence as a weighted average of the disease rates of the practices its residents are registered at, weighted by how many of that LSOA's patients attend each practice (from NHS GP–LSOA registration data). Counts are then re-expressed against ONS mid-year population, consistent with the other domains.</p>
+  <p class="measure">QOF disease registers are published per GP practice, not per neighbourhood. We estimate each LSOA's prevalence as a weighted average of the disease rates of the practices its residents are registered at, weighted by how many of that LSOA's patients attend each practice (from NHS GP-LSOA registration data). Counts are then re-expressed against ONS mid-year population, consistent with the other domains.</p>
 
   <h2>Known limitations</h2>
   <ul class="measure">
@@ -49,13 +49,13 @@
   <p class="muted small">All data-quality corrections are surfaced by an automated validator that runs over the raw outputs; see the pipeline repository.</p>
 
   <h2>The paper</h2>
-  <p class="measure">The methodology behind the ADI is set out in full in the paper <em>“An annual deprivation index for neighbourhoods in England”</em> — Lukas Kikuchi, Robert Calvert Jump, Jo Michell &amp; Will Stronge (2024).</p>
+  <p class="measure">The methodology behind the ADI is set out in full in the paper <em>“An annual deprivation index for neighbourhoods in England”</em>, by Lukas Kikuchi, Robert Calvert Jump, Jo Michell and Will Stronge (2024).</p>
   <p>
     <a class="btn btn--accent" href="{base}/annual-deprivation-index-paper.pdf" target="_blank" rel="noopener">Download the paper (PDF) ↓</a>
   </p>
 
   <h2>Data &amp; reproducibility</h2>
-  <p class="measure">The full pipeline — fetch, process and aggregate — is open source and reproducible end to end. All sources are public; no API keys are required.</p>
+  <p class="measure">The full pipeline (fetch, process and aggregate) is open source and reproducible end to end. All sources are public; no API keys are required.</p>
   <p>
     <a class="btn btn--ghost" href="https://github.com/Autonomy-Data-Unit/annual-deprivation-index" target="_blank" rel="noopener">Pipeline on GitHub ↗</a>
     <a class="btn btn--ghost" href="{base}/adi-vs-imd">How it complements the IMD →</a>
