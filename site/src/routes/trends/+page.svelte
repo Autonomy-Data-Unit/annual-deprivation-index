@@ -60,11 +60,11 @@
   const covidBars = $derived(dash ? dash.covid_top_lads.slice(0,12).map(d=>({label:d.name, value:d.change*100})) : []);
 </script>
 
-<svelte:head><title>Trends — ADI over 2014–2024</title></svelte:head>
+<svelte:head><title>Trends — ADI over 2014–2025</title></svelte:head>
 
 <div class="container section">
-  <p class="eyebrow">2014–2024</p>
-  <h1>Eleven years of deprivation</h1>
+  <p class="eyebrow">2014–2025</p>
+  <h1>Twelve years of deprivation</h1>
   <p class="lead measure">The ADI's annual cadence turns deprivation into a moving picture — most starkly the COVID-19 employment shock of 2020, which the IMD's five-yearly snapshots entirely missed.</p>
 
   {#if dash}

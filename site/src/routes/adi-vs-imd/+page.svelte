@@ -59,7 +59,7 @@
       <tbody>
         <tr><th>Domains</th><td>7 — income, employment, education, health, crime, housing, living environment</td><td>3 — employment, crime, health</td></tr>
         <tr><th>Measure</th><td>Relative <strong>rank</strong> (1 = most deprived)</td><td>Absolute <strong>rate</strong> (e.g. % claiming)</td></tr>
-        <tr><th>Cadence</th><td>Every ~5 years (2015, 2019, 2025)</td><td>Every year (2014–2024)</td></tr>
+        <tr><th>Cadence</th><td>Every ~5 years (2015, 2019, 2025)</td><td>Every year (2014–2025)</td></tr>
         <tr><th>Data points / decade</th><td>~2</td><td>11</td></tr>
         <tr><th>Captures shocks?</th><td>Only at the next edition</td><td>Within the year</td></tr>
         <tr><th>Best for</th><td>Comparing & ranking areas; funding allocation</td><td>Tracking change over time; absolute levels</td></tr>
@@ -175,7 +175,7 @@
 <!-- (d) annual resolution -->
 <section class="container section--tight measure-wide">
   <h2><span class="sec">d</span> Annual resolution catches what snapshots miss</h2>
-  <p class="measure">The ADI provides 11 annual readings where the IMD gives 2. Nowhere is that clearer than 2020: the national claimant rate jumped from {fmtPct(imd.covid.y2019)} to {fmtPct(imd.covid.y2020)} — it nearly doubled — in a single year. The IMD 2019 was already published; the next edition was 2025.</p>
+  <p class="measure">The ADI provides 12 annual readings where the IMD gives 2. Nowhere is that clearer than 2020: the national claimant rate jumped from {fmtPct(imd.covid.y2019)} to {fmtPct(imd.covid.y2020)} — it nearly doubled — in a single year. The IMD 2019 was already published; the next edition was 2025.</p>
   <div class="card">
     <LineChart x={imd.annual_trend.years} series={[{label:'National claimant rate', color:DOMAIN_HUES.employment, values:imd.annual_trend.values}]}
       yFormat={(v)=>(v*100).toFixed(0)+'%'} yZero width={860} height={300} showLegend={false}

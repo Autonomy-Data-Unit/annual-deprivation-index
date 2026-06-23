@@ -38,7 +38,7 @@
 
 <svelte:head>
   <title>ADI — Annual Deprivation Index for England</title>
-  <meta name="description" content="An annual, absolute measure of deprivation across England — employment, crime and health — at neighbourhood, local-authority, regional and national level, 2014–2024. A product of the Autonomy Data Unit." />
+  <meta name="description" content="An annual, absolute measure of deprivation across England — employment, crime and health — at neighbourhood, local-authority, regional and national level, 2014–2025. A product of the Autonomy Data Unit." />
 </svelte:head>
 
 <!-- Hero -->
@@ -49,7 +49,7 @@
       <h1>Deprivation across England,<br />measured every year.</h1>
       <p class="lead measure">
         The Annual Deprivation Index tracks <strong>absolute</strong> rates of deprivation across three
-        domains — employment, crime and health — every year from 2014 to 2024, at four geographic levels.
+        domains — employment, crime and health — every year from 2014 to 2025, at four geographic levels.
         It complements the government's Index of Multiple Deprivation, which ranks areas only every few years.
       </p>
       <div class="hero__cta">
@@ -59,7 +59,7 @@
     </div>
     <div class="hero__stats">
       <div class="stat">
-        <div class="stat__num">{fmtPct(dash.headline.claimant_rate_2024)}</div>
+        <div class="stat__num">{fmtPct(dash.headline.claimant_rate_latest)}</div>
         <div class="stat__lbl">National claimant rate, {dash.latest_year}</div>
       </div>
       <div class="stat">
@@ -71,7 +71,7 @@
         <div class="stat__lbl">Neighbourhoods (LSOAs) measured</div>
       </div>
       <div class="stat">
-        <div class="stat__num">11 × 3</div>
+        <div class="stat__num">{mani.years.length} × 3</div>
         <div class="stat__lbl">years × domains, every area</div>
       </div>
     </div>

@@ -105,3 +105,6 @@ site/static/favicon-16.png
 site/static/favicon-32.png
 site/static/apple-touch-icon-180.png
 site/static/og-image.png
+
+# store is a symlink to the Hetzner volume (data lives off-repo)
+/store

@@ -30,7 +30,7 @@ LU_LAD = ROOT / "store" / "inputs" / "geo_lookups" / "lsoa21_to_lad25.csv"
 LU_RGN = ROOT / "store" / "inputs" / "geo_lookups" / "lad25_to_rgn25.csv"
 WEB = ROOT / "site" / "static" / "data"
 
-YEARS = list(range(2014, 2025))  # 2014..2024
+YEARS = list(range(2014, 2026))  # 2014..2025
 LEVELS = ["england", "region", "lad", "lsoa"]
 
 CRIME_TYPES = [
@@ -527,16 +527,17 @@ covid["change"] = covid["r20"] - covid["r19"]
 covid["pct"] = covid["change"] / covid["r19"] * 100
 covid_top = covid.sort_values("change", ascending=False).head(20)
 
-# extremes latest year (2024) most-deprived LADs by claimant rate
-lad24 = data["lad"]["employment"][2024]
+# extremes for the latest available year, most-deprived LADs by claimant rate
+LATEST = YEARS[-1]
+lad24 = data["lad"]["employment"][LATEST]
 most_dep = lad24.sort_values("claimant_count_rate", ascending=False).head(15)
 least_dep = lad24.sort_values("claimant_count_rate", ascending=True).head(15)
 
 dashboard = {
-    "latest_year": 2024,
+    "latest_year": LATEST,
     "england": {"claimant_rate": emp_eng, "total_crime_rate": crime_eng, "depression_rate": dep_eng},
     "headline": {
-        "claimant_rate_2024": rnd(float(lad24["claimant_count"].sum() / lad24["pop"].sum()), 6),
+        "claimant_rate_latest": rnd(float(lad24["claimant_count"].sum() / lad24["pop"].sum()), 6),
         "covid": {
             "y2019": rnd(float(lad19["claimant_count"].sum() / lad19["pop"].sum()), 6),
             "y2020": rnd(float(lad20["claimant_count"].sum() / lad20["pop"].sum()), 6),
@@ -616,7 +617,7 @@ def correlations_for(adi, imd, via_xwalk):
 imd25, imd19, imd15 = load_imd("2025"), load_imd("2019"), load_imd("2015")
 corr15, _ = correlations_for(adi_lsoa_year(2015), imd15, True)
 corr19, _ = correlations_for(adi_lsoa_year(2019), imd19, True)
-corr25, m25 = correlations_for(adi_lsoa_year(2024), imd25, False)
+corr25, m25 = correlations_for(adi_lsoa_year(YEARS[-1]), imd25, False)
 
 # scatter sample for 2025 (claimant vs imd employment; crime vs imd crime; dep vs imd health)
 samp = m25.sample(min(4000, len(m25)), random_state=42)
