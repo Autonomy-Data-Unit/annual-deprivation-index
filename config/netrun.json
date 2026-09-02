@@ -192,6 +192,18 @@
           "func": "adi.nodes.aggregate.main"
         },
         "type": "node"
+      },
+      {
+        "name": "validate",
+        "description": "Validate the published outputs and record the report; fail the run on structural blockers.",
+        "extra": {
+          "source_path": "src/adi/nodes/validate.py"
+        },
+        "factory": "netrun.node_factories.from_function",
+        "factory_args": {
+          "func": "adi.nodes.validate.main"
+        },
+        "type": "node"
       }
     ],
     "edges": [
@@ -278,6 +290,12 @@
         "source_port": "out",
         "target_node": "aggregate",
         "target_port": "domains_ready"
+      },
+      {
+        "source_node": "aggregate",
+        "source_port": "out",
+        "target_node": "validate",
+        "target_port": "outputs_ready"
       }
     ]
   }

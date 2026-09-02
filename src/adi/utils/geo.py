@@ -98,9 +98,21 @@ def build_crosswalk(
     # Filter out complex changes
     xwalk = xwalk[xwalk["CHGIND"] != "X"].copy()
 
-    # Merge with LSOA 2021 populations
+    # Merge with LSOA 2021 populations.
+    #
+    # A missing population used to become 0 here, which gives the LSOA weight 0
+    # and publishes it with zero claimants, zero crime and zero disease -- a gap
+    # in the population fetch presented as a measurement. Reject instead: there
+    # is no defensible weight for an area whose population we do not have.
     xwalk = xwalk.merge(pop, on="LSOA21CD", how="left")
-    xwalk["lsoa21_pop"] = xwalk["lsoa21_pop"].fillna(0)
+    missing = sorted(xwalk.loc[xwalk["lsoa21_pop"].isna(), "LSOA21CD"].unique())
+    if missing:
+        raise ValueError(
+            f"{len(missing)} LSOA 2021 area(s) in the crosswalk have no population "
+            f"estimate (e.g. {missing[:5]}). Refusing to weight them as zero, which "
+            f"would publish them as measured zeroes. Re-run the fetch_populations "
+            f"node for this year."
+        )
 
     # Compute weights
     # For U and M: each row gets weight 1.0 (one LSOA11 -> one LSOA21, or
@@ -113,10 +125,21 @@ def build_crosswalk(
             group["weight"] = 1.0
             weights.append(group)
         elif chgind == "S":
-            # For each LSOA11, compute weight as LSOA21_pop / total_pop_of_splits
+            # For each LSOA11, compute weight as LSOA21_pop / total_pop_of_splits.
+            # A family with no population at all has no defensible split, so it
+            # is rejected rather than given weight 0 -- which would silently
+            # delete the parent's counts instead of failing.
             group = group.copy()
             total_pop = group.groupby("LSOA11CD")["lsoa21_pop"].transform("sum")
-            group["weight"] = np.where(total_pop > 0, group["lsoa21_pop"] / total_pop, 0)
+            empty = sorted(group.loc[total_pop <= 0, "LSOA11CD"].unique())
+            if empty:
+                raise ValueError(
+                    f"{len(empty)} split LSOA 2011 area(s) have zero total LSOA 2021 "
+                    f"population (e.g. {empty[:5]}), so their counts cannot be divided "
+                    f"between the children. Refusing to assign weight 0, which would "
+                    f"drop the parent's counts from the outputs entirely."
+                )
+            group["weight"] = group["lsoa21_pop"] / total_pop
             weights.append(group)
 
     result = pd.concat(weights, ignore_index=True)
@@ -156,12 +179,19 @@ def apply_crosswalk(
 
     # Reaggregate by LSOA21CD.
     #
-    # min_count=1 is load-bearing: pandas' default sum() returns 0 for an
-    # all-NaN group, which would turn "this quantity was never collected" into
-    # the assertion "we measured it and it was nil". QOF stopped publishing
-    # several disease groups (SMOK after 2013-14, THY after 2013-14, CVDPP
-    # after 2019-20), and those arrive here as all-NaN columns. They must stay
-    # NaN all the way to the published outputs.
+    # min_count=1 covers exactly one case, and it is worth being precise about
+    # which. pandas' default sum() returns 0 for an ALL-NaN group, turning "this
+    # quantity was never collected" into "we measured it and it was nil". QOF
+    # stopped publishing several disease groups (SMOK and THY after 2013-14,
+    # CVDPP after 2019-20) and they arrive here as all-NaN columns; min_count=1
+    # keeps them NaN all the way to the published outputs.
+    #
+    # It does NOT rescue a PARTLY-NaN group. That still sums its measured members
+    # and returns a total that looks complete. What makes the partial case safe
+    # is not this argument but `covered_population`: the count and the population
+    # it is divided by carry the same NaN mask, so the published rate is over the
+    # measured subset either way, and `{col}_pop / pop` is how a reader sees how
+    # much of the area it rests on. Do not read min_count=1 as more than it is.
     result = merged.groupby("LSOA21CD")[cols_to_weight].sum(min_count=1).reset_index()
 
     return result
@@ -212,10 +242,14 @@ def aggregate_to_geography(
     )
 
     # Sum counts, population and per-count covered population by geography.
-    # min_count=1 so an all-NaN group stays NaN rather than becoming 0 -- see
-    # the note in apply_crosswalk. A count and its covered population share the
-    # same NaN mask by construction, so they become NaN together: "nothing here
-    # was measured" rather than "nothing here was found".
+    #
+    # min_count=1 keeps an all-NaN group NaN instead of 0 -- "nothing here was
+    # measured" rather than "nothing here was found". It does nothing for a
+    # partly-measured group; see the fuller note in apply_crosswalk. What handles
+    # that case is the pairing below: a count and its covered population share
+    # one NaN mask by construction, so they are summed over the same areas and
+    # the rate is right whether the group was fully measured, partly measured, or
+    # not at all.
     covered = covered_population(merged, count_cols, pop_col)
     agg_cols = count_cols + [pop_col] + list(covered.columns)
     result = (

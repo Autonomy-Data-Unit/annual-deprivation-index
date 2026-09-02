@@ -30,6 +30,19 @@
 #
 # `{col}_rate == {col} / {col}_pop` holds exactly at every level, and
 # `{col}_pop / pop` is the share of the area the number rests on.
+#
+# The health files additionally carry how much GP registration the estimate rests
+# on, as counts plus the ratios derived from them at each level:
+#
+# * `gp_registrations` / `registration_coverage` -- registered patients, and
+#   registered patients per resident. Legitimately above 1 in places with a large
+#   commuter catchment (up to ~3.5).
+# * `qof_covered_registrations` / `qof_coverage` -- of those registrations, how
+#   many sat at a practice QOF actually published that year.
+#
+# Both are reported, never enforced: thin registration runs only ~1.9x the noise
+# floor, so a coverage floor would throw away usable data. No row is withheld on
+# their account; they are there so a reader can judge one.
 
 # %%
 #|default_exp aggregate
@@ -176,11 +189,27 @@ def _pop_year_from_stem(stem):
     files are QOF years, named by the April-to-March window they cover
     ("health_2020_21" -> 2021); the ADI labels a QOF year by the year it ENDS,
     so that is the population year too.
+
+    A QOF year spans exactly one April-to-March window, so the end year is always
+    `start + 1` and the two-digit suffix is just its last two digits. Checking the
+    suffix against that is what makes the century safe -- "1999_00" is 2000 and
+    "2099_00" is 2100 without special-casing, because 00 == 2000 % 100. The old
+    `start + 1 if suffix < 50 else start` was not a century guard at all: it
+    returned the START year whenever it fired, so it was wrong for every label
+    from "2049_50" on, and it silently accepted nonsense like "health_2020_25"
+    as 2021 rather than rejecting it.
     """
     m = re.search(r"_(\d{4})_(\d{2})$", stem)
     if m:
         start_year, end_suffix = int(m.group(1)), int(m.group(2))
-        return start_year + 1 if end_suffix < 50 else start_year
+        end_year = start_year + 1
+        if end_suffix != end_year % 100:
+            raise ValueError(
+                f"Cannot determine a population year from filename stem {stem!r}: a QOF "
+                f"year spans one April-to-March window, so the suffix after {start_year} "
+                f"must be {end_year % 100:02d}, not {end_suffix:02d}."
+            )
+        return end_year
     m = re.search(r"_(\d{4})$", stem)
     if not m:
         raise ValueError(f"Cannot determine a population year from filename stem {stem!r}")
@@ -234,8 +263,47 @@ def _reset_denominator(df, count_cols, pop_col, pop_year, derived_counts):
     return df
 
 
+def _health_coverage_counts(df, pop_col):
+    """The head counts behind process_health's two coverage ratios.
+
+    process_health reports coverage per LSOA as ratios, and a ratio cannot be
+    crosswalked or summed -- which is why they stopped at store/pipeline. Carry
+    the counts standing behind them instead and recompute the ratios at every
+    published level:
+
+        gp_registrations          = registration_coverage * pop
+        qof_covered_registrations = qof_coverage * gp_registrations
+
+    Both are genuine counts of registered patients, so they ride through
+    `apply_crosswalk` and `_reset_denominator` exactly like the afflicted counts:
+    the per-resident rate is held fixed and the count re-derived against the
+    publication year's population, which leaves both ratios unchanged.
+
+    Reported, never enforced. Thin registration is only about 1.9x the noise
+    floor, so a coverage floor would discard usable data; the numbers are
+    published so a reader can judge, and no row is withheld on their account.
+    """
+    registrations = df["registration_coverage"] * df[pop_col]
+    return {
+        "gp_registrations": registrations,
+        "qof_covered_registrations": df["qof_coverage"] * registrations,
+    }
+
+
+def _add_ratios(frame, ratio_cols):
+    """Recompute ratio-of-two-counts columns on a published frame.
+
+    Rates are never carried through the crosswalk or summed; they are derived
+    again from their two counts at whatever level we are at, so a ratio means the
+    same thing at LSOA, LAD, Region and England.
+    """
+    for out_col, num_col, den_col in ratio_cols:
+        frame[out_col] = frame[num_col] / frame[den_col].replace(0, np.nan)
+    return frame
+
+
 def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_pattern,
-                    derived_counts=False):
+                    derived_counts=False, extra_counts_fn=None, ratio_cols=()):
     """Process a single domain: crosswalk + aggregate to all geography levels."""
     files = sorted(domain_dir.glob(year_pattern))
     if not files:
@@ -248,6 +316,16 @@ def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_patter
 
         # Identify count columns (not rates, not identifiers)
         count_cols = count_cols_fn(df)
+
+        # Extra counts a domain wants published that are not its own measure --
+        # currently health's coverage. Added to count_cols so they are crosswalked,
+        # re-denominated and aggregated by the same code path as everything else,
+        # with no special casing anywhere below.
+        if extra_counts_fn is not None:
+            extra = extra_counts_fn(df, pop_col)
+            for name, series in extra.items():
+                df[name] = series
+            count_cols = count_cols + list(extra)
 
         # Which year's population this file is published against. It picks BOTH
         # the crosswalk's split weights and the denominator, which is the point:
@@ -281,6 +359,7 @@ def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_patter
         for col in count_cols:
             denom = lsoa_out[f"{col}{COVERED_POP_SUFFIX}"].replace(0, np.nan)
             lsoa_out[f"{col}_rate"] = lsoa_out[col] / denom
+        lsoa_out = _add_ratios(lsoa_out, ratio_cols)
         lsoa_out.to_csv(lsoa_dir / f"{stem}.csv", index=False)
 
         # --- LAD, Region and England ---
@@ -298,6 +377,7 @@ def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_patter
                 lsoa21_df, lookup, "LSOA21CD", code_col, name_col,
                 count_cols, pop_col,
             )
+            level_df = _add_ratios(level_df, ratio_cols)
             level_df.to_csv(level_dir / f"{stem}.csv", index=False)
             levels[level] = level_df
 
@@ -342,6 +422,18 @@ _process_domain(
     "pop",
     "health_*.csv",
     derived_counts=True,
+    extra_counts_fn=_health_coverage_counts,
+    ratio_cols=(
+        # `registration_coverage` is `gp_registrations_rate` by construction. Both
+        # are published: the rate column is the shape every other count carries,
+        # and the named ratio is what process_health, the pipeline files and
+        # CLAUDE.md call it. They are one number, not two -- do not let them drift.
+        ("registration_coverage", "gp_registrations",
+         f"gp_registrations{COVERED_POP_SUFFIX}"),
+        # What share of the LSOA's registrations QOF actually published. Unlike
+        # the above this is not a per-resident rate, so it has no `_pop` form.
+        ("qof_coverage", "qof_covered_registrations", "gp_registrations"),
+    ),
 )
 
 # %%
