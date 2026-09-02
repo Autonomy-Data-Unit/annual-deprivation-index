@@ -17,8 +17,9 @@
   // search
   let query = $state('');
   let searchLevel = $state('lad');
-  let nameIndex = { region: [], lad: [], lsoa: [] };   // [{code,name,level,lad}]
-  let lsoaLoaded = false;
+  let nameIndex = $state.raw({ region: [], lad: [], lsoa: [] });   // [{code,name,level,lad}]
+  let lsoaLoaded = $state(false);
+  let lsoaLoading = $state(false);
 
   const metrics = $derived(mani ? mani.domains[domain].metrics : []);
   const metricDef = $derived(metrics.find((m) => m.key === metricKey) || metrics[0]);
@@ -28,8 +29,8 @@
     mani = await loadManifest();
     hier = await loadHier();
     // build region + lad name index
-    const rc = await codesFile('region'); nameIndex.region = rc.codes.map((c,i)=>({code:c,name:rc.names[i],level:'region'}));
-    const lc = await codesFile('lad'); nameIndex.lad = lc.codes.map((c,i)=>({code:c,name:lc.names[i],level:'lad',lad:c}));
+    const rc = await codesFile('region'); nameIndex = { ...nameIndex, region: rc.codes.map((c,i)=>({code:c,name:rc.names[i],level:'region'})) };
+    const lc = await codesFile('lad'); nameIndex = { ...nameIndex, lad: lc.codes.map((c,i)=>({code:c,name:lc.names[i],level:'lad',lad:c})) };
     // seed from query ?areas=lad:CODE,...  or ?a=lad:CODE
     const u = $page.url.searchParams;
     const raw = u.get('areas') || u.get('a') || '';
@@ -39,10 +40,15 @@
   });
 
   async function ensureLsoaIndex() {
-    if (lsoaLoaded) return;
-    const c = await codesFile('lsoa');
-    nameIndex.lsoa = c.codes.map((cd,i)=>({code:cd,name:c.names[i],level:'lsoa',lad:hier.lsoa_lad[cd]}));
-    lsoaLoaded = true;
+    if (lsoaLoaded || lsoaLoading) return;
+    lsoaLoading = true;
+    try {
+      const c = await codesFile('lsoa');
+      nameIndex = { ...nameIndex, lsoa: c.codes.map((cd,i)=>({code:cd,name:c.names[i],level:'lsoa',lad:hier.lsoa_lad[cd]})) };
+      lsoaLoaded = true;
+    } finally {
+      lsoaLoading = false;
+    }
   }
 
   const results = $derived.by(() => {
@@ -59,7 +65,7 @@
     const file = await areaFile(level, parentLad);
     const rec = file.areas[code];
     if (!rec) return;
-    const color = SERIES_COLORS[selected.length];
+    const color = SERIES_COLORS.find((candidate) => !selected.some((area) => area.color === candidate));
     selected = [...selected, { level, code, name: rec.name, rec, color }];
     query = '';
   }
@@ -114,7 +120,7 @@
       <div class="search">
         <div class="seg">
           {#each [['region','Regions'],['lad','Local authorities'],['lsoa','Neighbourhoods']] as [v,l]}
-            <button aria-pressed={searchLevel===v} onclick={async ()=>{ searchLevel=v; if(v==='lsoa') await ensureLsoaIndex(); }}>{l}</button>
+            <button aria-pressed={searchLevel===v} onclick={()=>{ searchLevel=v; if(v==='lsoa') ensureLsoaIndex(); }}>{l}</button>
           {/each}
         </div>
         <input type="search" placeholder="Search {searchLevel === 'lsoa' ? 'neighbourhood (e.g. Hackney 001A)' : 'area name'}…" bind:value={query} />
@@ -125,6 +131,8 @@
             <li><button onclick={() => addArea(r.level, r.code, r.lad)}>{r.name} <span class="muted small">{r.lad && r.level==='lsoa' ? hier.lad_names[r.lad] : ''}</span></button></li>
           {/each}
         </ul>
+      {:else if searchLevel === 'lsoa' && lsoaLoading}
+        <p class="search-status muted small" role="status">Loading neighbourhoods…</p>
       {/if}
     {/if}
   </div>
@@ -146,22 +154,24 @@
     </div>
 
     <!-- latest-year snapshot table -->
-    <div class="card">
+    <div class="card snapshot">
       <h4 class="card__title">Snapshot · {years[yi]}</h4>
-      <table class="data-table">
-        <thead><tr><th>Area</th><th class="num">Claimant rate</th><th class="num">All crime /1k</th><th class="num">Depression</th><th class="num">Population</th></tr></thead>
-        <tbody>
-          {#each selected as s}
-            <tr>
-              <td><span class="dot" style="background:{s.color}"></span> {s.name}</td>
-              <td class="num">{fmtValue(s.rec.employment.rate[yi],'pct')}</td>
-              <td class="num">{s.rec.crime.total_rate[yi]!=null ? (s.rec.crime.total_rate[yi]*1000).toFixed(1) : '—'}</td>
-              <td class="num">{fmtValue(s.rec.health.diseases.DEP.rate[yi],'pct')}</td>
-              <td class="num">{s.rec.employment.pop[yi]?.toLocaleString('en-GB') ?? '—'}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr><th>Area</th><th class="num">Claimant rate</th><th class="num">All crime /1k</th><th class="num">Depression</th><th class="num">Population</th></tr></thead>
+          <tbody>
+            {#each selected as s}
+              <tr>
+                <td><span class="dot" style="background:{s.color}"></span> {s.name}</td>
+                <td class="num">{fmtValue(s.rec.employment.rate[yi],'pct')}</td>
+                <td class="num">{s.rec.crime.total_rate[yi]!=null ? (s.rec.crime.total_rate[yi]*1000).toFixed(1) : '—'}</td>
+                <td class="num">{fmtValue(s.rec.health.diseases.DEP.rate[yi],'pct')}</td>
+                <td class="num">{s.rec.employment.pop[yi]?.toLocaleString('en-GB') ?? '—'}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
     </div>
   {/if}
 </div>
@@ -178,10 +188,14 @@
   .results { list-style: none; margin: var(--sp-2) 0 0; padding: 0; border: 1px solid var(--grey-2); border-radius: var(--radius-sm); max-height: 240px; overflow-y: auto; }
   .results li button { width: 100%; text-align: left; background: var(--paper); border: 0; border-bottom: 1px solid var(--grey-3); padding: 8px 10px; font-size: var(--fs-1); }
   .results li button:hover { background: var(--bg); }
+  .search-status { margin: var(--sp-2) 0 0; }
   .controls { display: flex; gap: var(--sp-3); align-items: center; flex-wrap: wrap; margin: var(--sp-4) 0; }
   .dseg { display: inline-flex; gap: 4px; } .dbtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--paper); border: 1px solid var(--grey-2); border-radius: var(--radius-sm); font-size: var(--fs-1); color: #444; }
   .dbtn[aria-pressed="true"] { border-color: var(--h); color: var(--ink); box-shadow: inset 3px 0 0 var(--h); font-weight: 600; }
   .card { margin-bottom: var(--sp-4); }
+  .snapshot { min-width: 0; }
+  .table-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
+  .table-scroll table { min-width: 560px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
   .small { font-size: var(--fs-1); }
 </style>

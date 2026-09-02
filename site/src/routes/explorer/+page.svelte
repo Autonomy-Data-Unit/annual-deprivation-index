@@ -5,7 +5,7 @@
   import Legend from '$lib/components/Legend.svelte';
   import Sparkline from '$lib/components/Sparkline.svelte';
   import DomainIcon from '$lib/components/DomainIcon.svelte';
-  import { manifest as loadManifest, areaRecord, hierarchy as loadHier, fmtValue, fmtPct, DOMAIN_HUES } from '$lib/data.js';
+  import { manifest as loadManifest, areaRecord, hierarchy as loadHier, codes as codesFile, mapValues, fmtValue, fmtPct, DOMAIN_HUES } from '$lib/data.js';
 
   let mani = $state(null);
   let hier = $state(null);
@@ -15,7 +15,13 @@
   let year = $state(2024);
   let selected = $state(null);     // {code, name, level}
   let detail = $state(null);       // area record
-  let mapComp;
+  let mapView = $state(null);      // last fully loaded map request
+  let mapLoading = $state(true);
+  let mapError = $state(null);
+  let hoveredCode = $state(null);
+  let mapRequest = 0;
+  let detailRequest = 0;
+  let deepLink = null;
 
   const metrics = $derived(mani ? mani.domains[domain].metrics : []);
   const metricDef = $derived(metrics.find((m) => m.key === metricKey) || metrics[0]);
@@ -25,14 +31,15 @@
   function metricFmt(v) { return fmtValue(v, fmt); }
 
   onMount(async () => {
-    mani = await loadManifest();
-    hier = await loadHier();
+    [mani, hier] = await Promise.all([loadManifest(), loadHier()]);
     const u = new URL(location.href);
     const dParam = u.searchParams.get('domain');
     if (dParam && ['employment', 'crime', 'health'].includes(dParam)) domain = dParam;
     // only Region/LAD/LSOA are mappable; anything else (e.g. england) falls back to LAD
     const lParam = u.searchParams.get('level');
     if (lParam && ['region', 'lad', 'lsoa'].includes(lParam)) level = lParam;
+    const codeParam = u.searchParams.get('code');
+    if (codeParam) deepLink = { level, code: codeParam };
     year = mani.years[mani.years.length - 1];
     ensureMetric();
   });
@@ -41,16 +48,91 @@
     const ms = mani.domains[domain].metrics;
     if (!ms.find((m) => m.key === metricKey)) metricKey = ms[0].key;
   }
-  function setDomain(d) { domain = d; ensureMetric(); }
+  function setDomain(d) { domain = d; if (mani) ensureMetric(); }
 
-  async function onSelect(code, name) {
-    if (!code) return;
+  function setLevel(nextLevel) {
+    if (nextLevel === level) return;
+    detailRequest++;
+    deepLink = null;
+    level = nextLevel;
+    selected = null;
+    detail = null;
+    hoveredCode = null;
+  }
+
+  async function prepareMap(nextLevel, nextDomain, nextMetric, nextBreaks) {
+    const request = ++mapRequest;
+    mapLoading = true;
+    mapError = null;
+    hoveredCode = null;
+
+    try {
+      const [codeData, valueData] = await Promise.all([
+        codesFile(nextLevel),
+        mapValues(nextLevel, nextDomain, nextMetric)
+      ]);
+      if (request !== mapRequest) return;
+
+      mapView = {
+        level: nextLevel,
+        domain: nextDomain,
+        metric: nextMetric,
+        breaks: nextBreaks,
+        codes: codeData.codes,
+        names: codeData.names,
+        years: valueData.years,
+        values: valueData.values,
+        codeIndex: new globalThis.Map(codeData.codes.map((code, i) => [code, i]))
+      };
+      mapLoading = false;
+
+      if (deepLink?.level === nextLevel) {
+        const target = deepLink;
+        deepLink = null;
+        const i = mapView.codeIndex.get(target.code);
+        await onSelect(target.code, i == null ? null : mapView.names[i], nextLevel);
+      }
+    } catch (e) {
+      if (request === mapRequest) mapError = e?.message || 'Map data could not be loaded.';
+    } finally {
+      if (request === mapRequest) mapLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (!mani || !hier || !metricDef) return;
+    prepareMap(level, domain, metricKey, [...breaks]);
+  });
+
+  async function onSelect(code, name, selectedLevel = mapView?.level) {
+    if (!code || !selectedLevel || mapLoading) return;
+    const request = ++detailRequest;
     let parentLad = null;
-    if (level === 'lsoa') parentLad = hier.lsoa_lad[code];
-    const rec = await areaRecord(level, code, parentLad);
-    selected = { code, name: rec?.name || name || code, level };
+    if (selectedLevel === 'lsoa') parentLad = hier.lsoa_lad[code];
+    let rec;
+    try {
+      rec = await areaRecord(selectedLevel, code, parentLad);
+    } catch {
+      return;
+    }
+    if (request !== detailRequest || selectedLevel !== level || selectedLevel !== mapView?.level || !rec) return;
+    selected = { code, name: rec.name || name || code, level: selectedLevel };
     detail = rec;
   }
+
+  function onHover(code) { hoveredCode = code; }
+
+  const hoverInfo = $derived.by(() => {
+    if (!hoveredCode || !mapView || mapLoading) return null;
+    const ci = mapView.codeIndex.get(hoveredCode);
+    if (ci == null) return null;
+    const yi = mapView.years.indexOf(year);
+    return {
+      code: hoveredCode,
+      name: mapView.names[ci] || hoveredCode,
+      value: yi < 0 ? null : mapView.values[yi]?.[ci]
+    };
+  });
 
   // series for selected area + current metric (for the mini trend in panel)
   const detailSeries = $derived.by(() => {
@@ -77,7 +159,7 @@
       <label class="field__lbl">Geography</label>
       <div class="seg">
         {#each [['region','Region'],['lad','Local authority'],['lsoa','Neighbourhood']] as [v,l]}
-          <button aria-pressed={level === v} onclick={() => { level = v; selected = null; detail = null; }}>{l}</button>
+          <button aria-pressed={level === v} onclick={() => setLevel(v)}>{l}</button>
         {/each}
       </div>
     </div>
@@ -119,9 +201,22 @@
   </aside>
 
   <!-- map -->
-  <div class="mapcol">
-    <Map bind:this={mapComp} {level} {domain} metric={metricKey} {year} {breaks}
-         selected={selected?.code} onselect={onSelect} />
+  <div class="mapcol" aria-busy={mapLoading}>
+    {#if mapView}
+      <Map level={mapView.level} domain={mapView.domain} metric={mapView.metric} {year} breaks={mapView.breaks}
+           selected={selected?.level === mapView.level ? selected.code : null} onselect={onSelect} onhover={onHover} />
+    {/if}
+    {#if hoverInfo}
+      <div class="map-hover">
+        <strong>{hoverInfo.name}</strong>
+        <span>{metricFmt(hoverInfo.value)} · {metricDef?.label}, {year}</span>
+      </div>
+    {/if}
+    {#if mapLoading}
+      <div class="map-status" role="status">{mapView ? 'Updating map…' : 'Loading map…'}</div>
+    {:else if mapError}
+      <div class="map-status map-status--error" role="alert">{mapError}</div>
+    {/if}
   </div>
 
   <!-- detail -->
@@ -150,7 +245,7 @@
       <a class="btn btn--ghost full mt" href="{base}/area?level={level}&code={detail.code}{level==='lsoa' && detail.parents?.lad ? '&lad='+detail.parents.lad.code : ''}">Full area profile →</a>
     {:else}
       <div class="detail__empty">
-        <p class="muted">Click an area on the map to see its details and trends.</p>
+        <p class="muted">Hover to identify an area; click it to see details and trends.</p>
         <p class="muted small">Switch geography, domain, measure and year using the controls.</p>
       </div>
     {/if}
@@ -164,6 +259,11 @@
   .panel--detail { border-left: 1px solid var(--grey-2); }
   .panel__h { font-size: var(--fs-4); margin-bottom: var(--sp-4); }
   .mapcol { position: relative; }
+  .map-hover { position: absolute; z-index: 3; bottom: var(--sp-3); left: var(--sp-3); display: flex; flex-direction: column; max-width: calc(100% - 2 * var(--sp-3)); padding: 8px 10px; border: 1px solid var(--grey-2); border-radius: var(--radius-sm); background: rgba(255,255,255,0.96); box-shadow: var(--shadow-2); pointer-events: none; }
+  .map-hover strong { font-size: var(--fs-1); }
+  .map-hover span { color: var(--grey-1); font-size: var(--fs-0); }
+  .map-status { position: absolute; z-index: 10; inset: 0; display: grid; place-items: center; padding: var(--sp-4); background: var(--bg); color: var(--grey-1); }
+  .map-status--error { color: var(--ink); text-align: center; }
   .field { margin-bottom: var(--sp-4); }
   .field__lbl { display: block; font-size: var(--fs-0); text-transform: uppercase; letter-spacing: var(--tracking-caps); color: var(--grey-1); margin-bottom: 6px; font-weight: 600; }
   .seg { display: flex; flex-direction: column; width: 100%; }

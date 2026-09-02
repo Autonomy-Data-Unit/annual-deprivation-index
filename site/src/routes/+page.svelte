@@ -10,6 +10,9 @@
   let { data } = $props();
   const { dash, mani, region } = data;
   const years = mani.years;
+  const healthConditionCount = mani.domains.health.metrics.length;
+  // site/static/data/imd.json, contradictions_periods.2015_2019
+  const imdContradiction = { early: 2015, late: 2019, pct: 44 };
 
   const claimant = dash.england.claimant_rate;
   const crime = dash.england.total_crime_rate;
@@ -118,7 +121,7 @@
     {#each [
       { d: 'employment', title: 'Employment', desc: 'Universal Credit claimant counts from Nomis: who is out of work and claiming support.', series: claimant.values, fmt: (v) => (v*100).toFixed(0)+'%' },
       { d: 'crime', title: 'Crime', desc: 'Police-recorded street crime across 14 categories from data.police.uk.', series: crime.values, fmt: (v) => (v*1000).toFixed(0) },
-      { d: 'health', title: 'Health', desc: 'GP-recorded disease prevalence across 24 conditions, from the NHS QOF.', series: dep.values, fmt: (v) => (v*100).toFixed(0)+'%' }
+      { d: 'health', title: 'Health', desc: `GP-recorded disease prevalence across ${healthConditionCount} conditions, from the NHS QOF.`, series: dep.values, fmt: (v) => (v*100).toFixed(0)+'%' }
     ] as c}
       <a class="dcard" href="{base}/explorer?domain={c.d}">
         <div class="dcard__head">
@@ -154,7 +157,7 @@
       <p class="eyebrow">ADI's contribution</p>
       <h3 class="card__title">Absolute, not just relative</h3>
       <p>
-        Between 2015 and 2019, <strong>43% of local authorities</strong> saw their IMD ranking
+        Between {imdContradiction.early} and {imdContradiction.late}, <strong>{imdContradiction.pct}% of local authorities</strong> saw their IMD ranking
         "improve" while their actual claimant rate <em>rose</em>: they only improved relative to
         areas that worsened faster. The ADI makes that deterioration visible to policymakers.
       </p>

@@ -41,7 +41,7 @@
     if (lvl === 'england') {
       const rf = await areaFile('region');
       children = hier.regions.map((r) => ({ code: r.code, name: r.name, level: 'region',
-        rate: rf.areas[r.code]?.employment.rate[yi] }));
+        rate: rf.areas[r.code]?.employment.rate[yi] })).sort((a,b)=>(b.rate??-1)-(a.rate??-1));
     } else if (lvl === 'region') {
       const lf = await areaFile('lad');
       const lads = hier.region_lads[cd] || [];
@@ -82,6 +82,13 @@
     if (c.level === 'lsoa') return `${base}/area?level=lsoa&code=${c.code}&lad=${c.lad}`;
     return `${base}/area?level=${c.level}&code=${c.code}`;
   }
+  function explorerHref() {
+    const mapLevel = level === 'england' ? 'region' : level;
+    let href = `${base}/explorer?level=${mapLevel}&domain=employment`;
+    if (level !== 'england') href += `&code=${encodeURIComponent(code)}`;
+    if (level === 'lsoa' && rec?.parents?.lad) href += `&lad=${encodeURIComponent(rec.parents.lad.code)}`;
+    return href;
+  }
   // crumb
   const crumbs = $derived.by(() => {
     if (!rec) return [];
@@ -96,14 +103,16 @@
   const crimeBars = $derived.by(() => {
     if (!rec) return [];
     return Object.entries(rec.crime.types)
-      .map(([slug, t]) => ({ label: CRIME_LABELS[slug], value: (t.rate[yi] ?? 0) * 1000 }))
+      .filter(([, t]) => t.rate[yi] != null)
+      .map(([slug, t]) => ({ label: CRIME_LABELS[slug], value: t.rate[yi] * 1000 }))
       .sort((a, b) => b.value - a.value);
   });
   const healthBars = $derived.by(() => {
     if (!rec || !mani) return [];
     const labels = Object.fromEntries(mani.domains.health.metrics.map((m) => [m.key, m.label]));
     return Object.entries(rec.health.diseases)
-      .map(([cd, d]) => ({ label: labels[cd] || cd, value: (d.rate[yi] ?? 0) * 100 }))
+      .filter(([, d]) => d.rate[yi] != null)
+      .map(([cd, d]) => ({ label: labels[cd] || cd, value: d.rate[yi] * 100 }))
       .sort((a, b) => b.value - a.value).slice(0, 12);
   });
 </script>
@@ -166,17 +175,25 @@
     <div class="grid two">
       <div class="card">
         <p class="eyebrow">Crime mix · {years[yi]}</p><h4 class="card__title">By category (per 1,000)</h4>
-        <BarChart items={crimeBars} format={(v)=>v.toFixed(1)} color={DOMAIN_HUES.crime} labelW={170} />
+        {#if crimeBars.length}
+          <BarChart items={crimeBars} format={(v)=>v.toFixed(1)} color={DOMAIN_HUES.crime} labelW={170} />
+        {:else}
+          <p class="muted small">No crime data is available for this area and year.</p>
+        {/if}
       </div>
       <div class="card">
         <p class="eyebrow">Health · {years[yi]}</p><h4 class="card__title">Top recorded conditions (prevalence %)</h4>
-        <BarChart items={healthBars} format={(v)=>v.toFixed(1)+'%'} color={DOMAIN_HUES.health} labelW={170} />
+        {#if healthBars.length}
+          <BarChart items={healthBars} format={(v)=>v.toFixed(1)+'%'} color={DOMAIN_HUES.health} labelW={170} />
+        {:else}
+          <p class="muted small">No health data is available for this area and year.</p>
+        {/if}
       </div>
     </div>
 
     <div class="actions">
       <a class="btn btn--ghost" href="{base}/compare?a={level}:{code}">Compare this area →</a>
-      <a class="btn btn--ghost" href="{base}/explorer?level={level === 'england' ? 'region' : level}&domain=employment">See on map →</a>
+      <a class="btn btn--ghost" href={explorerHref()}>See on map →</a>
     </div>
 
     <!-- drill down -->
