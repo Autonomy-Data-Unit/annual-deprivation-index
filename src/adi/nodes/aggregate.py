@@ -26,20 +26,40 @@ async def main(ctx, print, domains_ready: dict) -> bool:
     output_dir.mkdir(parents=True, exist_ok=True)
     
     print(f"aggregate: years {year_start}-{year_end}, target vintage LSOA {lsoa_vintage}")
-    # Find the latest LSOA 2021 population file for crosswalk weighting
+    # The crosswalk's split weights and the published denominator are two halves of
+    # one division, so they must come from the SAME population year. Every output
+    # year therefore gets its own crosswalk, weighted by that year's LSOA 2021
+    # estimate, and both halves read one cached frame per year via
+    # `_population_for`. Weighting every year from a single file (it used to be the
+    # latest, population_2025.csv) while denominating per year scaled split LSOAs'
+    # published rates by up to 1.68x in 2014 -- see the note in `build_crosswalk`.
     pop_dir_2021 = const.population_data_path / "lsoa_2021"
-    pop_files = sorted(pop_dir_2021.glob("population_*.csv"))
-    lsoa21_pop_path = pop_files[-1]  # latest year
     
-    print(f"  building crosswalk using {lsoa21_pop_path.name} for population weights...")
-    crosswalk = build_crosswalk(
-        const.crosswalk_path / "lsoa11_to_lsoa21.csv",
-        lsoa21_pop_path,
-    )
-    n_unchanged = (crosswalk["CHGIND"] == "U").sum()
-    n_split = (crosswalk["CHGIND"] == "S").sum()
-    n_merged = (crosswalk["CHGIND"] == "M").sum()
-    print(f"  crosswalk: {n_unchanged} unchanged, {n_split} split rows, {n_merged} merge rows")
+    _populations = {}
+    _crosswalks = {}
+    
+    
+    def _population_for(pop_year):
+        """LSOA 2021 population for `pop_year`, loaded once and shared."""
+        if pop_year not in _populations:
+            _populations[pop_year] = load_lsoa21_population(pop_dir_2021, pop_year)
+        return _populations[pop_year]
+    
+    
+    def _crosswalk_for(pop_year):
+        """Crosswalk weighted by the same population that will be the denominator."""
+        if pop_year not in _crosswalks:
+            cw = build_crosswalk(
+                const.crosswalk_path / "lsoa11_to_lsoa21.csv",
+                _population_for(pop_year),
+            )
+            if not _crosswalks:  # composition is year-independent; log it once
+                print(f"  crosswalk: {(cw['CHGIND'] == 'U').sum()} unchanged, "
+                      f"{(cw['CHGIND'] == 'S').sum()} split rows, "
+                      f"{(cw['CHGIND'] == 'M').sum()} merge rows; "
+                      f"weights rebuilt per publication year")
+            _crosswalks[pop_year] = cw
+        return _crosswalks[pop_year]
     lsoa_to_lad = pd.read_csv(const.geo_lookups_path / "lsoa21_to_lad25.csv")
     lad_to_rgn = pd.read_csv(const.geo_lookups_path / "lad25_to_rgn25.csv")
     def _pop_year_from_stem(stem):
@@ -79,6 +99,10 @@ async def main(ctx, print, domains_ready: dict) -> bool:
           count is a presentational scaling of it. Swapping the denominator without
           rescaling would silently corrupt the prevalence estimate, so the rate is
           held fixed and the count re-derived against the new population.
+    
+        The denominator comes from `_population_for(pop_year)` -- the same cached
+        frame that weighted this file's crosswalk. Do not load it independently
+        here: numerator and denominator drifting apart is #6.
         """
         df = df.reset_index(drop=True).copy()
         if derived_counts:
@@ -86,7 +110,7 @@ async def main(ctx, print, domains_ready: dict) -> bool:
             for col in count_cols:
                 df[f"_rate_{col}"] = df[col] / denom
     
-        pop21 = load_lsoa21_population(pop_dir_2021, pop_year)
+        pop21 = _population_for(pop_year)
         df = df.drop(columns=[pop_col]).merge(pop21, on="LSOA21CD", how="left")
     
         n_missing = int(df[pop_col].isna().sum())
@@ -118,12 +142,16 @@ async def main(ctx, print, domains_ready: dict) -> bool:
             # Identify count columns (not rates, not identifiers)
             count_cols = count_cols_fn(df)
     
+            # Which year's population this file is published against. It picks BOTH
+            # the crosswalk's split weights and the denominator, which is the point:
+            # the two cancel for a split LSOA only when they are the same year.
+            pop_year = _pop_year_from_stem(stem)
+    
             # Apply crosswalk (LSOA 2011 -> LSOA 2021)
-            lsoa21_df = apply_crosswalk(df, crosswalk, count_cols, pop_col)
+            lsoa21_df = apply_crosswalk(df, _crosswalk_for(pop_year), count_cols, pop_col)
     
             # Publish against the real LSOA 2021 mid-year estimate for this year,
             # not the crosswalked (and, from 2021, frozen) 2011-vintage population.
-            pop_year = _pop_year_from_stem(stem)
             lsoa21_df = _reset_denominator(
                 lsoa21_df, count_cols, pop_col, pop_year, derived_counts,
             )

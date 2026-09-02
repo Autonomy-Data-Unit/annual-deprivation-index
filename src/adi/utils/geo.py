@@ -8,7 +8,7 @@ import pandas as pd
 
 def build_crosswalk(
     lsoa_xwalk_path: Path,
-    lsoa21_pop_path: Path,
+    lsoa21_pop: pd.DataFrame,
 ) -> pd.DataFrame:
     """Build a crosswalk table mapping LSOA 2011 to LSOA 2021 with weights.
 
@@ -20,13 +20,29 @@ def build_crosswalk(
     For split (S): weight = LSOA21_pop / sum(LSOA21_pop for this LSOA11)
     For complex (X): excluded
 
+    `lsoa21_pop` MUST be the population of the year the output will be published
+    against -- pass the very frame that becomes the denominator, as returned by
+    `load_lsoa21_population`. A split's weight and its denominator are two halves
+    of one division: weight_i = P_i / sum_j P_j, and the denominator is P_i, so
+    the published rate is count / sum_j P_j -- the parent's rate, identically for
+    every child, which is the only rate the crosswalk can justify. Take the two
+    from different years and that cancellation breaks: the child's rate is then
+    scaled by share_weighting_year / share_publication_year, which ran from 0.485
+    to 1.678 in 2014 while the weights came from a single 2025 file (#6).
+
+    This takes a DataFrame rather than a path precisely so that the caller cannot
+    hand the weights one population year and the denominator another.
+
+    Args:
+        lsoa_xwalk_path: ONS LSOA11 -> LSOA21 exact-fit lookup, with CHGIND.
+        lsoa21_pop: LSOA 2021 populations for the publication year, columns
+            LSOA21CD and pop, from `load_lsoa21_population`.
+
     Returns:
         DataFrame with columns: LSOA11CD, LSOA21CD, weight, CHGIND
     """
     xwalk = pd.read_csv(lsoa_xwalk_path)
-    pop = pd.read_csv(lsoa21_pop_path)
-    pop = pop.rename(columns={"GEOGRAPHY_CODE": "LSOA21CD", "OBS_VALUE": "lsoa21_pop"})
-    pop = pop[["LSOA21CD", "lsoa21_pop"]]
+    pop = lsoa21_pop.rename(columns={"pop": "lsoa21_pop"})[["LSOA21CD", "lsoa21_pop"]]
 
     # Filter out complex changes
     xwalk = xwalk[xwalk["CHGIND"] != "X"].copy()
