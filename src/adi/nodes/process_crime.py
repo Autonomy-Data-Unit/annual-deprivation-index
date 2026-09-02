@@ -69,6 +69,14 @@ async def main(ctx, print, data_ready: dict) -> bool:
         "wiltshire",
     })
     EXCLUDED_NETWORK_FORCE_SLUGS = frozenset({"btp"})
+
+    # Missing locations cannot be allocated to an LSOA or repaired downstream. A
+    # force-year is withheld when more than 10% of the rows that could belong to
+    # England (English LSOA code or no LSOA code) are unlocated. This is a
+    # materiality limit, not an estimate: the audit found that loss above 10% can
+    # reverse a local trend, while rejecting every force-year with even one missing
+    # code would remove almost the whole series.
+    MIN_GEOCODED_SHARE = 0.90
     def _build_lsoa21_to_lsoa11_remap() -> dict:
         """Map LSOA 2021 codes that don't exist in the LSOA 2011 universe back to their
         LSOA 2011 parent.
@@ -224,7 +232,13 @@ async def main(ctx, print, data_ready: dict) -> bool:
 
 
     def _load_street_data_for_year(year: int) -> tuple[pd.DataFrame, dict, dict]:
-        """Load a year and count included and excluded force-month records."""
+        """Load a year and audit force-month records before aggregation.
+
+        Exact duplicate rows with a non-empty Crime ID are one identified incident,
+        not several observations. Rows without an ID (notably ASB incidents) are
+        never deduplicated because otherwise separate incidents at the same
+        anonymised location would be indistinguishable.
+        """
         frames = []
         records = {force: {} for force in ENGLISH_TERRITORIAL_FORCE_SLUGS}
         excluded_records = {force: {} for force in EXCLUDED_NETWORK_FORCE_SLUGS}
@@ -232,26 +246,43 @@ async def main(ctx, print, data_ready: dict) -> bool:
             (key, path) for key, path in _street_file_index.items() if key[0] == year
         )
         for (_, force, month), csv_path in year_files:
-            df = pd.read_csv(csv_path, usecols=["LSOA code", "LSOA name", "Crime type"])
+            raw = pd.read_csv(csv_path)
             if force in excluded_records:
-                excluded_records[force][month] = len(df)
+                excluded_records[force][month] = len(raw)
                 continue
+
+            identified = raw["Crime ID"].fillna("").astype(str).str.strip().ne("")
+            duplicate = identified & raw.duplicated(keep="first")
+            df = raw.loc[
+                ~duplicate,
+                ["LSOA code", "LSOA name", "Crime type"],
+            ].copy()
+            df["_force"] = force
             frames.append(df)
             if force in records:
-                records[force][month] = len(df)
+                codes = df["LSOA code"]
+                missing = codes.isna() | codes.fillna("").astype(str).str.strip().eq("")
+                english = codes.str.startswith("E", na=False)
+                records[force][month] = {
+                    "records": len(df),
+                    "english_lsoa": int(english.sum()),
+                    "missing_lsoa": int(missing.sum()),
+                    "duplicates": int(duplicate.sum()),
+                }
         if not frames:
-            empty = pd.DataFrame(columns=["LSOA code", "LSOA name", "Crime type"])
+            empty = pd.DataFrame(columns=["LSOA code", "LSOA name", "Crime type", "_force"])
             return empty, records, excluded_records
         return pd.concat(frames, ignore_index=True), records, excluded_records
 
 
-    def _incomplete_force_coverage(year: int, records: dict) -> list[dict]:
-        """Return English force-years without 12 non-empty monthly submissions.
+    def _unusable_force_coverage(year: int, records: dict) -> list[dict]:
+        """Return force-years with incomplete months or material location loss.
 
-        Completeness is deliberately binary and source-evidenced: one non-empty
-        street file for every calendar month. We do not infer missingness from a
-        volume fall because real incidence/recording can change abruptly (notably
-        during COVID-19), so a numeric threshold would turn measurements into gaps.
+        Calendar completeness is deliberately binary and source-evidenced: one
+        non-empty street file for every month. Location coverage has an explicit
+        90% floor because an unlocated record cannot be assigned to any resident
+        denominator, and the source audit demonstrated trend reversal above 10%
+        missing. Neither check infers failure from a change in crime volume.
         """
         failures = []
         for force in sorted(ENGLISH_TERRITORIAL_FORCE_SLUGS):
@@ -260,8 +291,18 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 for month in range(1, 13)
                 if (year, force, month) in _street_file_index
             }
-            nonempty = {month for month, count in records[force].items() if count > 0}
-            if len(nonempty) == 12:
+            nonempty = {
+                month
+                for month, stats in records[force].items()
+                if stats["records"] > 0
+            }
+            english_lsoa = sum(stats["english_lsoa"] for stats in records[force].values())
+            missing_lsoa = sum(stats["missing_lsoa"] for stats in records[force].values())
+            location_scope = english_lsoa + missing_lsoa
+            geocoded_share = english_lsoa / location_scope if location_scope else np.nan
+            calendar_complete = len(nonempty) == 12
+            location_complete = location_scope > 0 and geocoded_share >= MIN_GEOCODED_SHARE
+            if calendar_complete and location_complete:
                 continue
             failures.append({
                 "force": force,
@@ -269,7 +310,13 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 "nonempty": nonempty,
                 "missing": set(range(1, 13)) - present,
                 "empty": present - nonempty,
-                "records": sum(records[force].values()),
+                "records": sum(stats["records"] for stats in records[force].values()),
+                "duplicates": sum(stats["duplicates"] for stats in records[force].values()),
+                "english_lsoa": english_lsoa,
+                "missing_lsoa": missing_lsoa,
+                "geocoded_share": geocoded_share,
+                "calendar_complete": calendar_complete,
+                "location_complete": location_complete,
             })
         return failures
     for year in range(year_start, year_end + 1):
@@ -296,16 +343,35 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 f"records={sum(monthly_records.values()):,}"
             )
 
-        incomplete_forces = _incomplete_force_coverage(year, force_records)
+        for force, monthly_records in sorted(force_records.items()):
+            duplicates = sum(stats["duplicates"] for stats in monthly_records.values())
+            if duplicates:
+                print(
+                    f"  {year}: DEDUPLICATED {force}: "
+                    f"{duplicates:,} exact repeated rows with a Crime ID"
+                )
+
+        unusable_forces = _unusable_force_coverage(year, force_records)
         unavailable_lsoas = set()
-        for coverage in incomplete_forces:
+        rejected_forces = set()
+        for coverage in unusable_forces:
             force = coverage["force"]
+            rejected_forces.add(force)
             missing = ",".join(f"{month:02d}" for month in sorted(coverage["missing"])) or "none"
             empty = ",".join(f"{month:02d}" for month in sorted(coverage["empty"])) or "none"
+            geocoded = coverage["geocoded_share"]
+            geocoded_text = "n/a" if pd.isna(geocoded) else f"{geocoded:.1%}"
+            reasons = []
+            if not coverage["calendar_complete"]:
+                reasons.append("calendar coverage")
+            if not coverage["location_complete"]:
+                reasons.append("LSOA coverage")
             print(
-                f"  {year}: INCOMPLETE {force}: "
+                f"  {year}: UNUSABLE {force} ({' and '.join(reasons)}): "
                 f"files={len(coverage['present'])}/12, nonempty={len(coverage['nonempty'])}/12, "
-                f"records={coverage['records']:,}, missing=[{missing}], empty=[{empty}]"
+                f"records={coverage['records']:,}, geocoded={geocoded_text} "
+                f"({coverage['english_lsoa']:,}/{coverage['english_lsoa'] + coverage['missing_lsoa']:,}), "
+                f"missing_months=[{missing}], empty_months=[{empty}]"
             )
             force_lads, reference_year = _territorial_force_lads(force, year)
             force_lsoas = set().union(*(_lad_to_lsoa11s[lad] for lad in force_lads))
@@ -314,6 +380,14 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 f"  {year}: {force} footprint from complete {reference_year}: "
                 f"{len(force_lads)} LADs / {len(force_lsoas)} LSOAs will be unavailable"
             )
+
+        if rejected_forces:
+            rejected = df["_force"].isin(rejected_forces)
+            print(
+                f"  {year}: rejected {int(rejected.sum()):,} retained records from "
+                f"{len(rejected_forces)} unusable force-year(s) before geographic aggregation"
+            )
+            df = df.loc[~rejected].copy()
 
         # Drop rows with no LSOA
         df = df.dropna(subset=["LSOA code"])
@@ -324,6 +398,7 @@ async def main(ctx, print, data_ready: dict) -> bool:
 
         # Filter out Welsh LSOAs
         df = df[~df["LSOA code"].str.startswith("W")]
+        df = df.drop(columns="_force")
 
         # Count crimes by LSOA and crime type
         counts = (
