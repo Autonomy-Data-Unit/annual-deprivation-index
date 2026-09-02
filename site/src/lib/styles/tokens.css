@@ -1,0 +1,161 @@
+/* =============================================================================
+   ADI — Annual Deprivation Index  ·  Design Tokens
+   A data product of the Autonomy Data Unit (ADU), Autonomy Institute.
+   Inherits the Autonomy / ASPECTT family system; extends it for ADI's
+   geographic + temporal + multi-domain data.
+
+   Conventions
+   - Brand ink is #333333; assets render ink with `currentColor` so they
+     theme by setting `color`.
+   - The golden accent (#fbc441) is exposed as --accent / --adi-accent and is
+     used SPARINGLY (header rule, primary action, selection, key marks).
+     It is NEVER the base map ramp.
+   - Maps use the NEUTRAL SEQUENTIAL slate ramp (--seq-*). Change maps use the
+     DIVERGING ramp (--div-*). See README for hex + rationale.
+   ============================================================================= */
+
+:root {
+  /* ---- Brand palette (from autonomy.work + aspectt) ---------------------- */
+  --ink:         #333333;   /* charcoal — header bg, primary text on light    */
+  --ink-2:       #1e1e2e;   /* near-black navy — body text (aspectt)          */
+  --paper:       #ffffff;   /* white — cards, text on dark                    */
+  --bg:          #f8f8fa;   /* light app background                           */
+
+  --accent:      #fbc441;   /* Autonomy golden — used sparingly               */
+  --accent-deep: #eab843;   /* golden hover / active                          */
+
+  --grey-1:      #898989;   /* muted text                                     */
+  --grey-2:      #cccccc;   /* borders / dividers                             */
+  --grey-3:      #eeeeee;   /* hairlines / subtle fills                       */
+
+  /* Themeable handle for assets: ink = currentColor, accent = this var.
+     Override --adi-accent to retint marks/icons without editing the SVG.   */
+  --adi-accent:  var(--accent);
+
+  /* ---- Choropleth: neutral sequential ramp (pale → charcoal) ------------
+     Single restrained hue: COOL SLATE (a touch of blue in the greys) so the
+     data surface reads as quiet/ONS, distinct from the warm golden accent
+     and from pure neutral UI greys. 7 steps; use the 5-step subset
+     (1,2,4,6,7) for coarse legends.                                         */
+  --seq-1: #f3f5f7;
+  --seq-2: #d7dde3;
+  --seq-3: #b3bdc7;
+  --seq-4: #8b97a4;
+  --seq-5: #636f7d;
+  --seq-6: #424b56;
+  --seq-7: #262c33;
+
+  /* ---- Diverging ramp for change maps (e.g. ADI rate Δ, IMD rank Δ) -----
+     Teal (improvement / fall) ←→ neutral grey midpoint ←→ rust (worsening /
+     rise). Deliberately NOT golden: gold stays a UI accent. Colour-blind-
+     safe teal/orange family, muted to sit under the ONS-quiet surface.     */
+  --div-neg-3: #1f6f6b;   /* strong improvement                              */
+  --div-neg-2: #4f9a93;
+  --div-neg-1: #97c4bf;
+  --div-0:     #eceef0;   /* no change (neutral)                             */
+  --div-pos-1: #e0b48f;
+  --div-pos-2: #c77f4d;
+  --div-pos-3: #9c4a22;   /* strong worsening                                */
+
+  /* Out-of-range / no-data fill for maps */
+  --map-nodata: var(--grey-3);
+  --map-stroke: var(--paper);   /* thin boundary lines between areas         */
+
+  /* ---- Domain hues (chips/labels only; maps still use --seq-*) ----------
+     Restrained tints to label the three domains in chips, legends, icon
+     accents — NOT for the choropleth surface.                              */
+  --domain-employment: #b8860b;  /* warm ochre  (UC claimants)              */
+  --domain-crime:      #6b5b95;  /* muted slate-violet (street crime)       */
+  --domain-health:     #2f7d6f;  /* deep teal (GP prevalence)               */
+
+  /* ---- Type --------------------------------------------------------------
+     IBM Plex Serif → headings / wordmark feel.
+     IBM Plex Sans  → body, UI, data labels, numerals.
+     IBM Plex Mono  → tabular figures where alignment matters.              */
+  --font-serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --font-sans:  "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto,
+                Helvetica, Arial, sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+                monospace;
+
+  /* Modular type scale — ratio 1.20 (minor third), base 16px.
+     --fs-0 is the small/caption step; --fs-1 is body.                      */
+  --fs-0:  0.694rem;   /* 11.1px — captions, legend ticks, fine print       */
+  --fs-1:  0.833rem;   /* 13.3px — secondary UI / data labels               */
+  --fs-2:  1rem;       /* 16px   — body                                     */
+  --fs-3:  1.2rem;     /* 19.2px — lead / card body                         */
+  --fs-4:  1.44rem;    /* 23px   — h4 / card title                          */
+  --fs-5:  1.728rem;   /* 27.6px — h3                                       */
+  --fs-6:  2.074rem;   /* 33.2px — h2                                       */
+  --fs-7:  2.488rem;   /* 39.8px — h1                                       */
+  --fs-8:  2.986rem;   /* 47.8px — hero wordmark                            */
+
+  --lh-tight:   1.15;  /* headings                                          */
+  --lh-snug:    1.3;   /* card titles / leads                               */
+  --lh-normal:  1.55;  /* body                                             */
+  --lh-loose:   1.7;   /* long-form prose                                   */
+
+  /* Letter-spacing for the ASPECTT-style caps wordmarks */
+  --tracking-wordmark: 0.22em;
+  --tracking-caps:     0.08em;   /* small caps section labels               */
+  --tracking-tight:    -0.01em;  /* large display headings                  */
+
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* ---- Spacing scale (4px base, geometric-ish) -------------------------- */
+  --sp-0:  0.25rem;   /*  4px */
+  --sp-1:  0.5rem;    /*  8px */
+  --sp-2:  0.75rem;   /* 12px */
+  --sp-3:  1rem;      /* 16px */
+  --sp-4:  1.5rem;    /* 24px */
+  --sp-5:  2rem;      /* 32px */
+  --sp-6:  3rem;      /* 48px */
+  --sp-7:  4rem;      /* 64px */
+  --sp-8:  6rem;      /* 96px */
+
+  /* ---- Lines / borders / radius ----------------------------------------
+     ADU house style: SHARP rectangles. Radius tokens exist for inputs/pills
+     only; cards and the mark stay square (radius 0).                       */
+  --line-hairline: 1px;
+  --line-rule:     1px;
+  --line-strong:   2px;
+
+  --border-card:   var(--line-hairline) solid var(--grey-2);
+  --border-subtle: var(--line-hairline) solid var(--grey-3);
+  --rule-accent:   var(--line-strong) solid var(--accent);  /* header rule  */
+
+  --radius-0:   0;        /* cards, mark, choropleth tiles — square         */
+  --radius-sm:  2px;      /* inputs                                         */
+  --radius-pill: 999px;   /* chips / toggles only                          */
+
+  /* ---- Elevation (quiet; ADU avoids heavy shadows) ---------------------- */
+  --shadow-0: none;
+  --shadow-1: 0 1px 2px rgba(30, 30, 46, 0.06);
+  --shadow-2: 0 2px 8px rgba(30, 30, 46, 0.08);
+
+  /* ---- Layout ----------------------------------------------------------- */
+  --measure:        66ch;     /* readable line length                       */
+  --container-max:  1200px;
+  --header-h:       56px;
+  --z-header:       100;
+  --z-overlay:      200;
+
+  /* ---- Motion (restrained) --------------------------------------------- */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast:  120ms;
+  --dur-base:  200ms;
+}
+
+/* ----------------------------------------------------------------------------
+   Dark surface helper. Apply `.theme-dark` (or set these on the charcoal
+   header) so assets using currentColor + --adi-accent flip cleanly:
+   ink becomes paper, the accent stays golden.
+   ---------------------------------------------------------------------------- */
+.theme-dark {
+  color: var(--paper);
+  --adi-accent: var(--accent);
+  --map-stroke: var(--ink);
+}

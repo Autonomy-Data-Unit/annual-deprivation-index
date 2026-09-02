@@ -12,19 +12,25 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+#
+# ANCHORED to the repo root with a leading slash. Unanchored, these Python
+# packaging patterns match at ANY depth, and `lib/` was silently excluding
+# site/src/lib/ -- every Svelte component, data.js and tokens.css -- so the
+# site could not be built from a fresh clone. The site's own generated
+# directories are listed explicitly further down.
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+/build/
+/develop-eggs/
+/dist/
+/downloads/
+/eggs/
+/.eggs/
+/lib/
+/lib64/
+/parts/
+/sdist/
+/var/
+/wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -97,6 +103,9 @@ site/build/
 site/.svelte-kit/
 site/scripts/.geo_tmp/
 site/static/data/
+# Generated download bundles (also caught by the generic `downloads/` rule
+# above; listed explicitly so it stays ignored if that rule ever changes).
+site/static/downloads/
 site/static/tiles/
 site/static/geo/
 site/static/brand/
