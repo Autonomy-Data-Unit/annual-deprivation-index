@@ -1,0 +1,21 @@
+# AppGarden deployment config for the ADI website.
+#
+#   production → https://adi.apps.autonomy.work   (the `adu-apps` garden)
+#
+# The site is a static SvelteKit build, so `site/build` must be built BEFORE
+# deploying. Use `scripts/deploy.sh`, which builds and then deploys; running
+# `appgarden deploy production` on its own only re-uploads whatever is already
+# sitting in site/build.
+
+[app]
+name = "adi"
+server = "adu-apps"
+method = "static"
+source = "site/build"          # SvelteKit adapter-static output
+subdomain = "adi"              # → adi.<server domain> = adi.apps.autonomy.work
+
+# AppGarden restamps created_at on every deploy; pin it so the app keeps its
+# real origin date (the first deploy, 2026-06-23) in the garden listing.
+created_at = "2026-06-23T14:16:40.823576+00:00"
+
+[environments.production]

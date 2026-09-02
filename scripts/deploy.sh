@@ -4,6 +4,9 @@
 #
 # Steps: build web data/assets (idempotent) → npm build → appgarden deploy.
 #
+# All deployment settings (app name, server, method, source, subdomain) live in
+# appgarden.toml at the repo root — this script only builds and then hands off.
+#
 # Usage:
 #   scripts/deploy.sh                 # build + deploy
 #   scripts/deploy.sh --force-data    # also rebuild geometry/data from the store
@@ -20,9 +23,7 @@ for a in "$@"; do
   esac
 done
 
-APP=adi
-SERVER=adu-apps
-SUBDOMAIN=adi
+ENV=production   # environment defined in appgarden.toml
 
 # 1. web data + assets
 if [[ $FORCE_DATA -eq 1 ]]; then
@@ -45,9 +46,8 @@ if [[ $BUILD_ONLY -eq 1 ]]; then
   exit 0
 fi
 
-# 3. deploy to AppGarden (static)
-echo "[deploy] deploying '$APP' to $SUBDOMAIN.apps.autonomy.work via $SERVER…"
-appgarden deploy --server "$SERVER" --name "$APP" --method static \
-  --source site/build --subdomain "$SUBDOMAIN"
+# 3. deploy to AppGarden — configuration comes from appgarden.toml
+echo "[deploy] deploying environment '$ENV' (see appgarden.toml)…"
+appgarden deploy "$ENV"
 
-echo "[deploy] done → https://$SUBDOMAIN.apps.autonomy.work"
+echo "[deploy] done."
