@@ -16,9 +16,11 @@
 # 1. Normalise QOF prevalence data into a standard schema
 # 2. Load LSOA-level GP patient registration data (which year's April edition
 #    corresponds to this QOF year)
-# 3. For each LSOA, compute the weighted prevalence across all GP practices
-#    that serve patients from that LSOA
-# 4. Save per-year CSV with prevalence rates and afflicted counts
+# 3. For each LSOA, compute the weighted prevalence across the GP practices
+#    that serve patients from that LSOA AND that QOF published that year,
+#    renormalising the weights over those practices and leaving the LSOA
+#    missing where they cover too little of it (see `MIN_QOF_COVERAGE`)
+# 4. Save per-year CSV with prevalence rates, afflicted counts and coverage
 #
 # After all years are processed, apply temporal interpolation to fill
 # missing subdomains across years.
@@ -134,13 +136,21 @@ def _normalise_qof(year_key: str) -> pd.DataFrame | None:
     list_pop_col = schema["list_pop_col"]
     disease_col = schema["disease_code_col"]
 
-    # Clean numeric columns
+    # Clean numeric columns.
+    #
+    # Blanks and the "-" / "Insufficient indicator data" sentinels stay NaN. They mean
+    # "QOF did not report this", which is not the same claim as "this practice has no
+    # cases": coercing them to 0 puts a false zero into the weighted average and drags
+    # every LSOA the practice serves down with it. There are 1,304 such blank registers
+    # in 2016-17, 399 in 2018-19, 252 in 2017-18 and 64 in 2015-16, plus 21 blank list
+    # sizes in 2015-16. A register genuinely recorded as "0" parses as 0 and is kept.
     for col in [register_col, list_pop_col]:
         if col in df.columns:
             df[col] = pd.to_numeric(
-                df[col].astype(str).str.replace(",", "").replace("-", "0").replace("Insufficient indicator data", "0"),
+                df[col].astype(str).str.replace(",", "")
+                       .replace("-", np.nan).replace("Insufficient indicator data", np.nan),
                 errors="coerce",
-            ).fillna(0)
+            )
 
     # Filter by list_type if needed (Era 4: multiple PATIENT_LIST_TYPE per practice)
     list_type_filter = schema.get("list_type_filter")
@@ -161,9 +171,14 @@ def _normalise_qof(year_key: str) -> pd.DataFrame | None:
     # consistent with later years that report a single HF row.
     # For all other diseases and eras there is one row per (practice, disease),
     # so the aggfunc choice has no effect.
+    #
+    # No fill_value: a (practice, disease) pair QOF did not publish must stay NaN so
+    # that _estimate_lsoa_prevalence drops the practice from that disease's weights.
+    # fill_value=0 asserted "this practice has no cases of this disease", which is a
+    # measurement nobody made.
     pivot = df.pivot_table(
         index=practice_col, columns=disease_col, values=register_col,
-        aggfunc="max", fill_value=0,
+        aggfunc="max",
     ).reset_index()
     pivot.columns.name = None
 
@@ -183,45 +198,102 @@ def _normalise_qof(year_key: str) -> pd.DataFrame | None:
 
 # %%
 #|export
+# Minimum share of an LSOA's GP registrations that must sit at practices QOF actually
+# published, for that LSOA's prevalence to be published rather than left missing.
+#
+# Renormalising the weights (see _estimate_lsoa_prevalence) assumes the registrations
+# QOF did not publish behave like the ones it did. That assumption decays smoothly as
+# coverage falls, so the floor was set by measuring the decay rather than by taste: each
+# (LSOA, disease, year) estimate was compared against the same LSOA's own value in its
+# full-coverage neighbouring years, and scored by how far it moved the LSOA in the
+# national decile ranking -- the error that actually matters for an area index.
+#
+#   coverage band    median |log err|   p90 decile shift   P(shift >= 2 deciles)
+#   [0.999, 1.000]        0.022                1                    2.8%   <- noise floor
+#   [0.90,  0.95)         0.036                1                    5.0%
+#   [0.80,  0.90)         0.048                1                    6.8%
+#   [0.70,  0.80)         0.073                2                   14.0%   <- breaks here
+#   [0.50,  0.60)         0.102                3                   25.8%
+#   [0.00,  0.05)         0.223                6                   56.6%
+#
+# At and above 0.80 the estimate moves an LSOA no further through the national ranking
+# than ordinary year-to-year variation moves it anyway (p90 of one decile, the same as
+# at full coverage). Below 0.80 the median shift becomes a whole decile and the p90
+# doubles, so the honest answer is "missing". The temporal interpolation further down
+# then fills the gap from the LSOA's own neighbouring years, which is a better estimator
+# than a rescaled minority of its registrations.
+#
+# Costs 1,296 of 394,128 LSOA-years (0.33%). Reproduce both tables with
+#   _dev/2026-09-02-stress-test/health-vs-qof/fix_00_floor_analysis.py
+#   _dev/2026-09-02-stress-test/health-vs-qof/fix_01_decile_shift.py
+MIN_QOF_COVERAGE = 0.80
+
+
 def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame) -> pd.DataFrame:
     """Estimate LSOA-level prevalence from QOF + GP-LSOA registration data.
 
-    For each LSOA i and GP practice k:
-        weight_ik = patients_from_LSOA_i_at_GP_k / total_patients_from_LSOA_i
-        LSOA_i_prevalence = sum_k(weight_ik * GP_k_register / GP_k_list_pop)
+    For each LSOA i and disease d, over the practices k for which QOF published both a
+    register for d and a usable list size ("covered" for d):
 
-    Weights sum to 1.0 per LSOA, so the result is a proper weighted average
-    of practice-level prevalence rates.
+        weight_ikd  = patients_ik / sum_{k' covered for d} patients_ik'
+        prevalence_id = sum_k weight_ikd * register_kd / list_pop_k
+        coverage_id = sum_{k covered for d} patients_ik / sum_{all k} patients_ik
+
+    The weights are renormalised over the COVERED practices, so they sum to 1.0 by
+    construction. They are deliberately NOT divided by the LSOA's full registration
+    total: QOF does not publish every practice every year -- 52 Buckinghamshire
+    practices are absent from QOF 2017-18, 41 Dudley practices from 2016-17, 39
+    Cornwall practices from 2018-19 -- and dividing by the full total instead leaves the
+    missing practices in the denominator while dropping them from the numerator, which
+    scales the whole estimate down by the missing share. That published
+    Buckinghamshire's 2018 hypertension at 0.81% against a true ~12.7%, and the Isles of
+    Scilly's 2025 at 0.46% against ~13%.
+
+    Renormalising is an assumption, not a measurement: it takes the covered practices as
+    representative of the uncovered ones. `coverage_id` is how much of the LSOA it rested
+    on, and a disease below MIN_QOF_COVERAGE is returned NaN rather than published.
+
+    Returns one row per LSOA present in `gp_lsoa`, with `{disease}_prevalence_rate`
+    columns and a `qof_coverage` column.
     """
     disease_cols = [c for c in qof.columns if c not in ("practice_code", "list_pop")]
 
-    # Compute total patients per LSOA (for normalising weights)
-    lsoa_totals = gp_lsoa.groupby("lsoa_code")["patients"].sum().rename("lsoa_total_patients")
+    # Every registration the LSOA has, including at practices QOF did not publish.
+    # This is the denominator for COVERAGE only, never for the weights.
+    lsoa_totals = gp_lsoa.groupby("lsoa_code")["patients"].sum()
 
-    # Join GP-LSOA with QOF data
     merged = gp_lsoa.merge(qof, on="practice_code", how="inner")
-    merged = merged.merge(lsoa_totals, on="lsoa_code", how="inner")
+    lsoa_code = merged["lsoa_code"]
+    patients = merged["patients"].astype(float)
+    list_pop = merged["list_pop"].where(merged["list_pop"] > 0)
 
-    # Weight = fraction of this LSOA's patients at this GP (sums to 1.0 per LSOA)
-    merged["weight"] = merged["patients"] / merged["lsoa_total_patients"]
-
-    # Compute practice-level prevalence rates for all diseases at once
-    list_pop_safe = merged["list_pop"].replace(0, np.nan)
+    # Per disease, the weighted numerator and the weight actually carried. A practice
+    # with no register for this disease, or no usable list size, contributes to neither,
+    # so it falls out of the weights instead of entering them as a zero rate.
+    parts = {}
     for disease in disease_cols:
-        merged[f"_wprev_{disease}"] = merged["weight"] * (merged[disease] / list_pop_safe)
+        rate_k = merged[disease] / list_pop           # NaN if either is missing
+        carried = patients.where(rate_k.notna(), 0.0)
+        parts[f"_num_{disease}"] = carried * rate_k.fillna(0.0)
+        parts[f"_den_{disease}"] = carried
+    # Coverage over practices QOF published at all, regardless of disease -- the summary
+    # reported in `qof_coverage`. Per-disease coverage can be lower where a published
+    # practice did not report one disease; the floor above uses the per-disease value.
+    parts["_den_any"] = patients.where(list_pop.notna(), 0.0)
 
-    # Aggregate to LSOA level in a single groupby
-    wprev_cols = [f"_wprev_{d}" for d in disease_cols]
-    lsoa_agg = merged.groupby("lsoa_code")[wprev_cols].sum()
+    sums = pd.DataFrame(parts, index=merged.index).groupby(lsoa_code).sum()
+    totals = lsoa_totals.reindex(sums.index).replace(0, np.nan)
 
-    # Build result DataFrame
-    result = pd.DataFrame(index=lsoa_agg.index)
+    result = pd.DataFrame(index=sums.index)
     for disease in disease_cols:
-        result[f"{disease}_prevalence_rate"] = lsoa_agg[f"_wprev_{disease}"]
+        den = sums[f"_den_{disease}"]
+        coverage = den / totals
+        rate = sums[f"_num_{disease}"] / den.replace(0, np.nan)
+        result[f"{disease}_prevalence_rate"] = rate.where(coverage >= MIN_QOF_COVERAGE)
+    result["qof_coverage"] = sums["_den_any"] / totals
+
     result.index.name = "LSOA11CD"
-    result = result.reset_index().rename(columns={"lsoa_code": "LSOA11CD"})
-
-    return result
+    return result.reset_index()
 
 # %% [markdown]
 # ## Process each QOF year
@@ -229,12 +301,19 @@ def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame) -> pd.Da
 # %%
 #|export
 def _load_population(year: int) -> pd.DataFrame:
-    """Load LSOA 2011 population for a given year, falling back to 2020."""
+    """Load LSOA 2011 population for a given year, falling back to 2020.
+
+    Welsh LSOAs are dropped, matching process_crime and process_claimant_counts: the
+    health domain is England-only because QOF and the GP-LSOA registration file both
+    are. The Nomis file carries 34,753 codes, of which 1,909 are Welsh, leaving the
+    32,844 English LSOA 2011 areas that define this node's output row set.
+    """
     for try_year in [year, 2020]:
         path = pop_dir / f"population_{try_year}.csv"
         if path.exists():
             df = pd.read_csv(path)
             df = df.rename(columns={"GEOGRAPHY_CODE": "LSOA11CD", "OBS_VALUE": "pop"})
+            df = df[~df["LSOA11CD"].str.startswith("W")]
             return df[["LSOA11CD", "pop"]]
     raise FileNotFoundError(f"No population file found for {year} or 2020 in {pop_dir}")
 
@@ -289,11 +368,20 @@ for year_key in all_year_keys:
     # Estimate LSOA prevalence
     result = _estimate_lsoa_prevalence(qof, gp_lsoa)
 
-    # Merge with population data and compute afflicted counts
+    # Merge with population and compute afflicted counts.
+    #
+    # Left-join FROM the population, not an inner join onto the estimate: an LSOA whose
+    # every practice is missing from QOF has no prevalence but is still a real place
+    # with a real population, and dropping its row shortened the year's file (33,707
+    # rows in 2017-18 and 33,740 in 2018-19 against 33,749 elsewhere) and made the
+    # published health `pop` contradict the employment `pop` for the same area and year
+    # -- Buckinghamshire 2018 was published at 478,425 against 541,983. Such an LSOA now
+    # emits an all-NaN prevalence row against its true population.
     pop = _load_population(qof_end)
-    result = result.merge(pop, on="LSOA11CD", how="inner")
+    result = pop.merge(result, on="LSOA11CD", how="left")
 
-    # Compute afflicted counts from prevalence * ONS population
+    # Compute afflicted counts from prevalence * ONS population. NaN prevalence gives a
+    # NaN count, which is what "not measured here" has to look like downstream.
     disease_cols_cur = [c for c in result.columns if c.endswith("_prevalence_rate")]
     for rate_col in disease_cols_cur:
         afflicted_col = rate_col.replace("_prevalence_rate", "_afflicted")
@@ -301,7 +389,11 @@ for year_key in all_year_keys:
 
     result.to_csv(out_path, index=False)
     disease_cols = [c for c in result.columns if c.endswith("_prevalence_rate")]
-    print(f"  QOF {year_key}: {len(result)} LSOAs, {len(disease_cols)} disease subdomains")
+    cov = result["qof_coverage"]
+    n_thin = int((cov < MIN_QOF_COVERAGE).sum() + cov.isna().sum())
+    print(f"  QOF {year_key}: {len(result)} LSOAs, {len(disease_cols)} disease subdomains, "
+          f"QOF coverage mean {cov.mean():.5f} min {cov.min():.5f}, "
+          f"{n_thin} LSOAs below the {MIN_QOF_COVERAGE:.0%} floor (left missing)")
     processed_years.append(year_key)
 
 # %% [markdown]
@@ -309,6 +401,14 @@ for year_key in all_year_keys:
 #
 # Fill missing health subdomains across years. Some disease groups are not
 # tracked in all years. For gaps of <= 2 consecutive missing values, interpolate.
+#
+# This is also what recovers the (LSOA, year) cells left missing by the
+# `MIN_QOF_COVERAGE` floor. Those gaps are almost always a single year -- QOF drops a
+# cohort of practices for one publication and restores them the next -- so they land in
+# the interior-gap case and are filled from the LSOA's own neighbouring years. That is a
+# better estimator than rescaling the minority of registrations QOF did publish, and it
+# is the same treatment build_data.py already applies to the DEP 2023-24 and OST 2014-15
+# basis changes.
 
 # %%
 #|export
