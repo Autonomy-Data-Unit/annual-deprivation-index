@@ -29,6 +29,7 @@
   const fmt = $derived(metricDef ? metricDef.fmt : 'pct');
 
   function metricFmt(v) { return fmtValue(v, fmt); }
+  function hoverValue(v) { return v == null || Number.isNaN(v) ? 'No data' : metricFmt(v); }
 
   onMount(async () => {
     [mani, hier] = await Promise.all([loadManifest(), loadHier()]);
@@ -209,7 +210,7 @@
     {#if hoverInfo}
       <div class="map-hover">
         <strong>{hoverInfo.name}</strong>
-        <span>{metricFmt(hoverInfo.value)} · {metricDef?.label}, {year}</span>
+        <span>{hoverValue(hoverInfo.value)} · {metricDef?.label}, {year}</span>
       </div>
     {/if}
     {#if mapLoading}
