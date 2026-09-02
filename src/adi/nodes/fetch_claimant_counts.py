@@ -3,7 +3,7 @@
 from adi import const
 
 async def main(ctx, print) -> bool:
-    """Download Universal Credit claimant count data from Nomis."""
+    """Download Claimant Count data (JSA plus the relevant UC component) from Nomis."""
     from adi.utils.nomis import download_claimant_counts
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]

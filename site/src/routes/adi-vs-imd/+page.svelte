@@ -96,7 +96,7 @@
     <div class="corr-text">
       {#if corrTab==='employment'}
         <h4>Employment: strong (r≈{corr[2019].employment.toFixed(2)})</h4>
-        <p>The ADI's Universal Credit claimant rate is a strong proxy for the IMD's Employment domain. Both capture worklessness, through different lenses: actual UC claims versus modelled unemployment and incapacity benefits.</p>
+        <p>The ADI's Claimant Count rate is a strong proxy for the IMD's Employment domain. Both capture worklessness through different lenses: administrative claims in the Claimant Count (JSA plus the relevant UC component) versus the IMD's unemployment and incapacity-benefit measures.</p>
       {:else if corrTab==='crime'}
         <h4>Crime: moderate (r≈{corr[2019].crime.toFixed(2)})</h4>
         <p>The ADI counts raw police-recorded incidents across all 14 street-crime types; the IMD models a rate from four. Different recording and modelling choices open a gap. That divergence is useful, not error.</p>

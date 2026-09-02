@@ -16,7 +16,7 @@
     <div class="card" style="--h:{DOMAIN_HUES.employment}">
       <span class="ic"><DomainIcon domain="employment" size={24} /></span>
       <h4>Employment</h4>
-      <p>Universal Credit claimant counts from <a href="https://www.nomisweb.co.uk/datasets/ucjsa" target="_blank" rel="noopener">Nomis</a> (dataset NM_162_1), monthly counts averaged to an annual claimant rate per area.</p>
+      <p>The <a href="https://www.nomisweb.co.uk/datasets/ucjsa" target="_blank" rel="noopener">Nomis</a> Claimant Count (dataset NM_162_1): Jobseeker's Allowance plus the relevant Universal Credit component, averaged from 12 monthly stock counts to an annual rate per area.</p>
     </div>
     <div class="card" style="--h:{DOMAIN_HUES.crime}">
       <span class="ic"><DomainIcon domain="crime" size={24} /></span>
@@ -31,24 +31,25 @@
   </div>
 
   <h2>Geography &amp; coverage</h2>
-  <p class="measure">Outputs are produced at four levels: <strong>LSOA</strong> (~33,750 neighbourhoods), <strong>local authority district</strong> (296), <strong>region</strong> (9) and <strong>England</strong>. Domains are processed in 2011 LSOA boundaries and converted to 2021 boundaries with a population-weighted crosswalk, then rolled up. The index is <strong>not</strong> combined into a single composite score; the three domains are kept separate.</p>
+  <p class="measure">Outputs are produced at four levels: <strong>LSOA</strong> (~33,750 neighbourhoods), <strong>local authority district</strong> (296), <strong>region</strong> (9) and <strong>England</strong>. Domains are processed in 2011 LSOA boundaries and converted to 2021 boundaries with a crosswalk weighted from each publication year's population, then rolled up. The index is <strong>not</strong> combined into a single composite score; the three domains are kept separate.</p>
+  <p class="measure"><code>pop</code> is the full all-age ONS population of an area. Each metric also carries its own coverage population — the population of neighbourhoods where that count is available — and its rate is count divided by that metric-specific population. This keeps unavailable areas out of both the count and its denominator at local-authority, regional and England level.</p>
 
   <h2>Estimating health at neighbourhood level</h2>
-  <p class="measure">QOF disease registers are published per GP practice, not per neighbourhood. We estimate each LSOA's prevalence as a weighted average of the disease rates of the practices its residents are registered at, weighted by how many of that LSOA's patients attend each practice (from NHS GP-LSOA registration data). Counts are then re-expressed against ONS mid-year population, consistent with the other domains.</p>
+  <p class="measure">QOF disease registers are published per GP practice, not per neighbourhood. For each disease we use practices with a published register and usable list size, weight them by the number of that LSOA's patients they cover, and renormalise those covered-practice weights to 1. This is an estimate over covered registrations, not a claim that QOF published every resident's practice: a source estimate is withheld below 80% registration coverage. Counts are modelled by scaling the resulting prevalence against ONS population.</p>
 
   <h2>Known limitations</h2>
   <ul class="measure">
-    <li>Nomis suppresses claimant counts below 5; these are treated as zero, a small downward bias in low-claimant areas.</li>
-    <li>Police-recorded crime completeness varies by force and period; incidents with missing LSOA codes are dropped, not imputed.</li>
-    <li>QOF reflects <em>GP-diagnosed</em> conditions and so understates genuinely under-diagnosed conditions (e.g. dementia, depression).</li>
-    <li>For 2021+ the 2011-vintage population series is unavailable, so the 2020 estimate is used as a fallback <em>within</em> the domain processing step. Published rates are not affected: they are re-denominated against the real LSOA 2021 mid-year estimate for each year. The exception is 2025, which uses the 2024 estimate because the ONS series stops at 2024.</li>
-    <li>Six "complex-change" LSOAs are excluded from the 2011→2021 conversion.</li>
-    <li><strong>Greater Manchester crime gap:</strong> Greater Manchester Police stopped supplying street-level data to data.police.uk in mid-2019, so its boroughs have no usable crime data for 2020 onward. These are shown as <em>no data</em> (not zero), and regional/national crime rates are computed from reporting areas only.</li>
-    <li><strong>Health years are offset by one.</strong> QOF runs April to March, and the ADI labels a QOF year by the year it <em>ends</em> — so health “2021” is QOF 2020-21, covering April 2020 to March 2021. Employment and crime years are calendar years. Comparing the three domains for the same labelled year therefore compares slightly different periods.</li>
-    <li><strong>Pandemic disruption to QOF recording (2020-21).</strong> Routine GP activity collapsed during the first Covid year, so disease registers under-record across the board in the year labelled 2021. Obesity is the clearest case: England prevalence runs 8.4% (2020) → 5.5% (2021) → 7.8% (2022). This is a recording artefact, not a fall in disease. We recommend not using 2021 health figures for trend analysis.</li>
-    <li><strong>Depression 2023-24 &amp; osteoporosis 2014-15:</strong> the NHS QOF publication reported these single-year figures on a different basis (incidence rather than cumulative prevalence). Each is treated as missing and linearly interpolated from the neighbouring years, consistent with the pipeline's gap-filling.</li>
+    <li><strong>Claimant Count rounding and definition.</strong> This is JSA plus the relevant UC component, not the total UC caseload or a count of unique people during the year. Nomis independently rounds each monthly observation to the nearest five. Published zeroes are rounded values, not suppressed blanks, and rounding can move low-count annual values either upward or downward.</li>
+    <li><strong>Crime coverage.</strong> Incidents without an LSOA code are dropped. British Transport Police is excluded because its national rail-passenger exposure has no comparable resident-area denominator. All 10 Greater Manchester LADs are blank from 2019 through 2025; in 2022 the 12 Devon &amp; Cornwall Police LADs and the City of London are also blank. These are shown as <em>no data</em>, and higher-level rates use only their metric-specific coverage populations.</li>
+    <li><strong>QOF coverage and missing values.</strong> Practices without a usable register are not treated as zero. Covered-practice weights are renormalised, and estimates below 80% disease-specific registration coverage are withheld. Interior gaps of at most two years may be linearly interpolated between observations; leading, trailing and longer gaps remain blank. At the series endpoints, 64 LSOAs have no health values in 2014, one has none in 2024 and two have none in 2025.</li>
+    <li>QOF reflects <em>GP-diagnosed and recorded</em> conditions and can understate underdiagnosed disease or vary with recording practice.</li>
+    <li>For 2021+ the 2011-vintage population series is unavailable, so the 2020 estimate is used inside domain processing. Published outputs are reset to each year's LSOA 2021 estimate through 2024; 2025 repeats the 2024 estimate because the source series stops there.</li>
+    <li>Six "complex-change" LSOAs are excluded from the 2011→2021 conversion, leaving 33,749 of England's 33,755 LSOA 2021 areas.</li>
+    <li><strong>Health years are offset by one.</strong> QOF runs April to March, and the ADI labels a QOF year by the year it <em>ends</em> — so health “2021” is QOF 2020-21. Employment and crime years are calendar years.</li>
+    <li><strong>QOF 2020-21 comparability.</strong> <a href="https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data/2020-21" target="_blank" rel="noopener">NHS Digital warns</a> that implementation changes may make indicator values inaccurate and comparisons with earlier years unreliable. Obesity was particularly affected, while asthma and COPD register definitions changed; this is not evidence that every condition moved downward.</li>
+    <li><strong>Health exclusions and corrections.</strong> Impossible prevalence and implausible one-year spikes are rejected as missing, not capped. Eight epilepsy LSOAs in 2016 and seven heart-failure LSOAs in 2021 are excluded from aggregate coverage. Depression 2024 and osteoporosis 2015 are interpolated only where both adjacent-year anchors exist; unanchored LSOAs remain blank.</li>
   </ul>
-  <p class="muted small">All data-quality corrections are surfaced by an automated validator that runs over the raw outputs; see the pipeline repository.</p>
+  <p class="muted small">An automated validator checks the pipeline outputs at LSOA, LAD, Region and England level; see the pipeline repository.</p>
 
   <h2>The paper</h2>
   <p class="measure">The methodology behind the ADI is set out in full in the paper <em>“An annual deprivation index for neighbourhoods in England”</em>, by Lukas Kikuchi, Robert Calvert Jump, Jo Michell and Will Stronge (2024).</p>

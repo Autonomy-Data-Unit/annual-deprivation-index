@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADI key visual — authentic England choropleth hero, TRUE vector.
 
-Reads the REAL boundary file + REAL 2024 Universal Credit claimant-rate values
+Reads the REAL boundary file + REAL 2024 Claimant Count rate values
 and emits clean <path> per LAD, coloured by the locked neutral slate sequential
 ramp (gold is NOT the map). Composes a proper hero: choropleth motif + ADI
 lockup + descriptor + ONE restrained golden accent (a single highlighted area
@@ -198,7 +198,7 @@ def compose(dark: bool) -> str:
     sub2, _ = _shape_to_path("Employment · Crime · Health · "
                              "2014–2024", FONT_SANS_REGULAR, 19)
     cap, _ = _shape_to_path(
-        f"Universal Credit claimant rate, {year}", FONT_SANS_MEDIUM, 17)
+        f"Claimant Count rate, {year}", FONT_SANS_MEDIUM, 17)
     hlcap, _ = _shape_to_path(
         f"{highlight_name} · {highlight_val*100:.1f}%",
         FONT_SANS_REGULAR, 16)

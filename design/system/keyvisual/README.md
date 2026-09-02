@@ -1,7 +1,7 @@
 # ADI key visual
 
 Hero / share-card key visual: an **authentic England choropleth** built as TRUE
-vector from the real boundary file and real 2024 Universal Credit claimant-rate
+vector from the real boundary file and real 2024 Claimant Count rate
 data, composed with the ADI lockup into an ONS-grade hero.
 
 ## Files

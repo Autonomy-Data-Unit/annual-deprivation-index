@@ -6,7 +6,7 @@ The pipeline produces three independent domain sub-indices:
 
 | Domain | Source | Metric |
 |---|---|---|
-| **Employment** | Universal Credit claimant counts ([Nomis](https://www.nomisweb.co.uk/datasets/ucjsa)) | Claimant rate per LSOA |
+| **Employment** | Claimant Count — JSA plus the relevant Universal Credit component ([Nomis](https://www.nomisweb.co.uk/datasets/ucjsa)) | Annual mean claimant rate per LSOA |
 | **Crime** | Police-recorded street crime ([data.police.uk](https://data.police.uk/data/archive/)) | Per-capita rates across 14 crime types |
 | **Health** | GP disease prevalence ([QOF](https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data)) weighted by [GP-LSOA patient registrations](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) | Estimated prevalence rates for 21 disease groups |
 
@@ -109,7 +109,7 @@ See [METHODOLOGY.md](METHODOLOGY.md) for a detailed description of the data proc
 
 ## Data Sources
 
-- **Claimant counts**: [Nomis](https://www.nomisweb.co.uk/datasets/ucjsa) Universal Credit dataset `NM_162_1` at LSOA 2011
+- **Claimant counts**: [Nomis](https://www.nomisweb.co.uk/datasets/ucjsa) Claimant Count dataset `NM_162_1` (JSA plus the relevant UC component) at LSOA 2011
 - **Street crime**: [data.police.uk](https://data.police.uk/data/archive/) monthly archives
 - **QOF prevalence**: [NHS Digital](https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data) Quality and Outcomes Framework
 - **GP-LSOA registrations**: [NHS Digital](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) (available from April 2014)

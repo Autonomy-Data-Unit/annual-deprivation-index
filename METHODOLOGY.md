@@ -10,7 +10,7 @@ All domain processing is performed in **LSOA 2011** vintage (the native geograph
 
 ## Year Coverage
 
-The binding constraint on the earliest year is the GP-LSOA patient registration data, which is available from April 2014 onward. The default pipeline range is **2014--2024**.
+The binding constraint on the earliest year is the GP-LSOA patient registration data, which is available from April 2014 onward. The default pipeline range is **2014--2025**.
 
 | Source | Available from | Geography |
 |---|---|---|
@@ -23,53 +23,55 @@ The binding constraint on the earliest year is the GP-LSOA patient registration 
 
 ## Population Estimates
 
-ONS mid-year population estimates are used as the denominator for all rate calculations. Two series are downloaded:
+ONS mid-year population estimates provide the all-age resident population. Two series are downloaded:
 
-- **LSOA 2011** populations from Nomis dataset NM_2010_1 (2011--2020). Used by all three domain processors.
-- **LSOA 2021** populations from Nomis dataset NM_2014_1 (2011--2024). Used for crosswalk weighting and, per-year, as the denominator in the final outputs.
+- **LSOA 2011** populations from Nomis dataset NM_2010_1 (2011--2020), used inside the three domain processors.
+- **LSOA 2021** populations from Nomis dataset NM_2014_1 (2011--2024), used to weight split LSOAs and to populate the final outputs.
 
-The LSOA 2011 population series ends in 2020. For years beyond 2020, the **domain processing step** falls back to the 2020 estimate, because the claimant, crime and QOF source data are all coded to 2011 boundaries and no later 2011-vintage population exists.
+The LSOA 2011 series ends in 2020. For later years the domain processors use the 2020 estimate because the claimant, crime and GP-registration sources are still coded to 2011 boundaries. The final aggregation then replaces that crosswalked population with the target-vintage LSOA 2021 estimate for the publication year. Split weights and the final population therefore come from the same year.
 
-That fallback does **not** reach the published outputs. The `aggregate` node discards the crosswalked 2011-vintage population and re-denominates every output against the real LSOA 2021 mid-year estimate for that year (`load_lsoa21_population`), so published rates for 2021 onward are computed against the actual population of that year rather than a frozen mid-2020 figure.
+Every final row carries two kinds of population:
 
-The two domain families are re-denominated differently, because they are not the same kind of quantity:
+- `pop` is the full all-age ONS population of the published area.
+- Each count has a metric-specific `<count>_pop`, the population of the LSOAs for which that count is present. At LSOA level it is `pop` when measured and missing when not; at LAD, Region and England it sums only the measured LSOAs. The published rate is `count / <count>_pop`, not `count / pop`.
 
-- **Employment and crime** counts are genuine counts — a claimant is a claimant regardless of the population. The counts are untouched and only the rate denominator moves.
-- **Health** counts are derived: `afflicted = prevalence_rate x population`, where the QOF-weighted prevalence *rate* is the measured quantity and the count is a presentational scaling of it. Re-denominating without rescaling would silently corrupt the prevalence estimate, so the rate is held fixed and the count re-derived against the new population.
+Employment and crime counts are retained when the target-vintage population is introduced. Health afflicted counts are modelled from prevalence, so their rates are held fixed and their counts are re-derived against the target population. If a metric is unavailable for some LSOAs, its aggregate count and metric-specific population both exclude them while `pop` continues to describe the whole area.
 
-**Caveat on 2025.** Nomis NM_2014_1 publishes to 2024. The 2025 population file is a copy of the 2024 estimate, so 2025 rates are computed against the 2024 population. This is the one remaining frozen denominator, and it is one year rather than five.
+**Caveat on 2025.** Nomis NM_2014_1 publishes through 2024. The 2025 population file repeats the 2024 estimate, so every 2025 `pop` and metric-specific population is on the 2024 population base.
 
 ## Employment Domain
 
-**Source:** Universal Credit claimant counts from the Nomis REST API (dataset NM_162_1, geography TYPE298 = LSOA 2011).
+**Source:** The Claimant Count from the Nomis REST API (dataset NM_162_1, geography TYPE298 = LSOA 2011). It combines all Jobseeker's Allowance claimants with the relevant Universal Credit component: UC claimants recorded as not in employment from May 2013 to April 2015, then those in the `Searching for Work` conditionality regime from April 2015 onward. A person claiming both can appear in both components.
 
 **Processing:**
 
-1. Monthly claimant counts are downloaded for each year (12 months per LSOA).
+1. Twelve monthly Claimant Count observations are downloaded for each calendar year.
 2. Welsh LSOAs (codes starting with "W") are filtered out.
-3. Monthly counts are averaged to produce an annual mean claimant count per LSOA.
-4. The annual count is merged with the LSOA 2011 mid-year population estimate for that year.
-5. The claimant rate is computed as: `claimant_rate = claimant_count / pop`.
+3. The monthly stock counts are averaged to an annual mean per LSOA; this is not a count of unique people during the year.
+4. The annual mean is merged with the LSOA 2011 population and the intermediate rate is `claimant_count / pop`.
+5. Final outputs add `claimant_count_pop`; the published rate is `claimant_count / claimant_count_pop`.
 
-**Suppressed counts:** Nomis suppresses counts below 5, returning them as empty values. These are treated as zero when computing the annual average. This introduces a small downward bias in LSOAs with very low claimant counts, but affects only LSOAs where the true monthly count is between 1 and 4.
+**Nearest-five rounding:** Nomis independently rounds every monthly observation to the nearest five; it does not return sub-five counts as blank suppressed cells in the audited 2014--2025 files. A published zero can therefore represent an unrounded integer from 0 to 2, while a published 5 can represent 3 to 7. Rounding can move an annual mean or an aggregate either upward or downward, with the largest relative effects in low-count areas. In the source audit, the conservative zero-only upper bound moved the England rate by at most 0.007 percentage points; among directly comparable unaffected LADs the largest observed absolute rate gap was 0.021 percentage points, while Stratford-on-Avon's low 2015 count differed from the independently rounded LAD value by 5.81% in relative terms.
 
-**Output columns:** `LSOA11CD`, `LSOA11NM`, `claimant_count`, `pop`, `claimant_rate`.
+**Intermediate output columns:** `LSOA11CD`, `LSOA11NM`, `claimant_count`, `pop`, `claimant_rate`. Final outputs additionally include `claimant_count_pop` and use it as the rate denominator.
 
 ## Crime Domain
 
-**Source:** Police-recorded street crime data from data.police.uk monthly archives.
+**Source:** Police-recorded street crime from data.police.uk monthly archives. British Transport Police is excluded because it covers a national rail network whose passenger population is not comparable with resident-area populations.
 
 Each archive is a ZIP file (~1.7 GB) containing a rolling 36-month window of incident-level data. The pipeline downloads December archives, selecting one every three years to minimise redundant downloads while ensuring full temporal coverage.
 
 **Processing:**
 
-1. All monthly per-force street crime CSVs for a given calendar year are loaded and concatenated.
-2. Incidents with missing LSOA codes are dropped. Welsh LSOAs are filtered out.
-3. Incidents are counted by LSOA and crime type, producing a wide-format table with one column per crime type (14 types: Anti-social behaviour, Bicycle theft, Burglary, Criminal damage and arson, Drugs, Other crime, Other theft, Possession of weapons, Public order, Robbery, Shoplifting, Theft from the person, Vehicle crime, Violence and sexual offences).
-4. The crime counts are merged with the LSOA 2011 population via a left join from the population table, so that LSOAs with zero reported crimes are included with zero counts rather than being dropped.
-5. Per-capita rates are computed for each crime type: `rate = count / pop`.
+1. The pipeline checks each English territorial force-year for 12 present, non-empty monthly street files. An incomplete force-year makes its inferred LAD/LSOA footprint unavailable for that year rather than publishing a partial annual total.
+2. Monthly territorial-force files are loaded. Incidents without an LSOA code are dropped, recent LSOA 2021 police codes are mapped back to their LSOA 2011 parents, and Welsh LSOAs are filtered out.
+3. Incidents are counted by LSOA and crime type, producing 14 count columns.
+4. Counts are left-joined from the LSOA 2011 population so a covered LSOA with no reported incidents receives zero, while an LSOA in an incomplete force footprint remains missing.
+5. Intermediate rates use `count / pop`. Final outputs add a metric-specific `<crime_type>_pop`, and each published rate is `count / <crime_type>_pop`.
 
-**Output columns:** `LSOA11CD`, `LSOA11NM`, `{crime_type}` (14 count columns), `pop`, `{crime_type}_rate` (14 rate columns).
+The known unavailable footprints are all 10 Greater Manchester LADs and their LSOAs from 2019 through 2025; in 2022 the 12 Devon & Cornwall Police LADs and the City of London are also unavailable. Region and England rates remain available over the population covered by complete forces.
+
+**Intermediate output columns:** `LSOA11CD`, `LSOA11NM`, 14 crime-type counts, `pop`, and 14 rates. Final outputs add one metric-specific population per crime type.
 
 ## Health Domain
 
@@ -77,7 +79,7 @@ The health domain is the most methodologically complex. It estimates LSOA-level 
 
 ### Data Sources
 
-**QOF (Quality and Outcomes Framework):** Per-GP-practice disease register sizes and list populations. Covers 21 disease groups: AF, AST, CAN, CHD, CKD, COPD, DEM, DEP, DM, EP, HF, HYP, LD, MH, NDH, OB, OST, PAD, PC, RA, STIA. QOF years run April to March (e.g. QOF 2021-22 covers April 2021 to March 2022).
+**QOF (Quality and Outcomes Framework):** Per-GP-practice disease register sizes and list populations. The published ADI covers 21 canonical disease groups: AF, AST, CAN, CHD, CKD, COPD, DEM, DEP, DM, EP, HF, HYP, LD, MH, NDH, OB, OST, PAD, PC, RA, STIA. QOF years run April to March (e.g. QOF 2021-22 covers April 2021 to March 2022). Three short-lived source groups (CVDPP, SMOK and THY) are present in intermediate files but excluded from the site and downloads because they do not provide a complete 2014--2025 series.
 
 **GP-LSOA patient registrations:** Per-practice, per-LSOA patient counts showing how many patients from each LSOA are registered at each GP practice. The April edition is used, matching the QOF year boundary (e.g. QOF 2021-22 is paired with April 2022 registrations).
 
@@ -100,78 +102,79 @@ The normalised output is pivoted to one row per practice with columns for each d
 
 ### Prevalence Estimation
 
-LSOA-level prevalence is estimated as a weighted average of GP-practice-level prevalence rates, where the weights reflect the proportion of each LSOA's patients registered at each practice.
+LSOA prevalence is estimated separately for each disease from GP practices for which QOF published both a usable disease register and a positive list population. Practices missing either value are not treated as zero.
 
-For each LSOA *i* and disease *d*:
-
-```
-prevalence_rate(i, d) = sum_k [ weight(i,k) * register(k,d) / list_pop(k) ]
-```
-
-where:
-
-- `weight(i, k) = patients(i, k) / total_patients(i)` is the fraction of LSOA *i*'s GP-registered patients who are at practice *k*
-- `patients(i, k)` is the number of patients from LSOA *i* registered at practice *k* (from the GP-LSOA registration data)
-- `total_patients(i) = sum_k patients(i, k)` is the total number of GP-registered patients from LSOA *i* across all practices
-- `register(k, d)` is the disease register size for disease *d* at practice *k* (from QOF)
-- `list_pop(k)` is the total registered patient list at practice *k* (from QOF)
-
-The weights sum to 1.0 per LSOA, so the result is a proper weighted average of practice-level prevalence rates. This avoids the need for spatial intersection: the GP-LSOA registration data directly tells us which LSOAs each practice serves.
-
-**Afflicted counts** are then derived by scaling the prevalence rate by the LSOA's ONS mid-year population estimate:
+For LSOA *i*, disease *d*, and the set of covered practices *C(i,d)*:
 
 ```
-afflicted(i, d) = prevalence_rate(i, d) * pop(i)
+covered_patients(i,d) = sum_{k in C(i,d)} patients(i,k)
+coverage(i,d) = covered_patients(i,d) / sum_{all k} patients(i,k)
+weight(i,k,d) = patients(i,k) / covered_patients(i,d)
+prevalence_rate(i,d) = sum_{k in C(i,d)} [ weight(i,k,d) * register(k,d) / list_pop(k) ]
 ```
 
-This uses the ONS general population rather than the GP-registered list population. The prevalence rate captures the disease burden as measured through GP registrations; multiplying by ONS population expresses this as an estimated count relative to the LSOA's total resident population. This ensures consistency with the employment and crime domains, which also use ONS population as their denominator, and produces rates that remain well-calibrated after the LSOA crosswalk and geographic aggregation steps.
+The disease-specific weights sum to 1.0 **over the covered practices**, not over all registrations in the LSOA. Renormalising makes the covered practices representative of the uncovered ones rather than implicitly assigning zero prevalence to practices QOF omitted. That assumption becomes unreliable when coverage is thin, so the source estimate is withheld when covered practices represent less than **80%** of the LSOA's registrations for that disease. The intermediate `qof_coverage` column summarises registration coverage by practices with a usable QOF list size; the threshold itself is applied per disease.
+
+Afflicted counts are modelled by scaling prevalence against the LSOA's ONS population:
+
+```
+afflicted(i,d) = prevalence_rate(i,d) * pop(i)
+```
+
+These are modelled resident counts, not observed patients. An unavailable prevalence produces an unavailable afflicted count. Any estimated prevalence outside the possible interval [0, 1] is rejected to missing rather than clamped.
 
 ### Temporal Interpolation
 
-Not all 21 disease groups are tracked in every QOF year (e.g. NDH was added in 2020-21). After processing all QOF years, a temporal interpolation step fills gaps:
+After all QOF years are processed, only short **interior** gaps are filled:
 
-- **Interior gaps** of 1--2 consecutive missing years: filled by linear interpolation between the flanking values.
-- **Leading gaps** of 1--2 years: extrapolated backward using linear regression on the first 2+ valid values.
-- **Trailing gaps** of 1--2 years: extrapolated forward using linear regression on the last 2+ valid values.
-- **Gaps longer than 2 consecutive years:** left as NaN (insufficient data for reliable interpolation).
+- Interior gaps of one or two consecutive years are linearly interpolated between the observations on both sides.
+- Leading and trailing gaps are left missing; the pipeline does not extrapolate beyond the observed series.
+- Gaps longer than two years are left missing.
 
-Interpolation is applied independently to each (LSOA, disease) time series. After interpolating prevalence rates, afflicted counts are recomputed as `prevalence_rate * pop`.
+Interpolation is performed independently for each LSOA and disease. Afflicted counts are then recomputed from the interpolated rate and population.
 
-**Output columns:** `LSOA11CD`, `{disease}_prevalence_rate` (21 columns), `{disease}_afflicted` (21 columns), `pop`.
+**Intermediate output columns:** `LSOA11CD`, `pop`, `{disease}_prevalence_rate`, `{disease}_afflicted`, and `qof_coverage`. There is no `list_pop` output column.
+
+### Publishing-stage health adjustments
+
+Before site JSON and download bundles are written, implausible one-year LSOA spikes are rejected to missing rather than capped (eight epilepsy values in 2016 and seven heart-failure values in 2021), and all higher geographies are rebuilt from the remaining LSOAs. The known single-year QOF basis changes for depression in 2024 and osteoporosis in 2015 are replaced by adjacent-year interpolation only where both anchors exist. Each published health metric has its own `<disease>_afflicted_pop`; areas without a usable or interpolated value contribute to neither its count nor its denominator.
 
 ## LSOA 2011 to LSOA 2021 Crosswalk
 
-All three domain processors output data in LSOA 2011 vintage, matching the source data. The aggregate node converts to LSOA 2021 using the ONS exact-fit lookup table (`LSOA11_LSOA21_LAD22_EW_LU`), which classifies each LSOA relationship as one of four change types:
+All three domain processors output data in LSOA 2011 vintage. The aggregate node converts each output year to LSOA 2021 using the ONS exact-fit lookup (`LSOA11_LSOA21_LAD22_EW_LU`) and an output-year-specific population crosswalk:
 
 | Change | LSOA 2011 | LSOA 2021 | Count | Method |
 |---|---|---|---|---|
 | Unchanged (U) | 1 | 1 | 33,647 | Direct mapping, weight = 1.0 |
-| Split (S) | 1 | 2+ | 861 old to 1,900 new | Weight by LSOA 2021 population proportion |
-| Merged (M) | 2+ | 1 | 239 old to 119 new | Sum values, weight = 1.0 per input LSOA |
+| Split (S) | 1 | 2+ | 861 old to 1,900 new | Weight by each target's LSOA 2021 population share in the publication year |
+| Merged (M) | 2+ | 1 | 239 old to 119 new | Sum values, weight = 1.0 per source LSOA |
 | Complex (X) | n | m | 6 | Excluded |
+
+Split weights are rebuilt for every publication year from the same LSOA 2021 population frame that becomes the final `pop`. This keeps the split numerator and denominator on one population vintage.
 
 **Disaggregation procedure:**
 
-1. Each LSOA 2011 row is joined with the crosswalk, producing one or more LSOA 2021 rows.
-2. Absolute counts and population are multiplied by the crosswalk weight. For unchanged and merged LSOAs, the weight is 1.0 (no splitting). For split LSOAs, the weight distributes the LSOA 2011 value proportionally to the LSOA 2021 populations of the resulting areas.
-3. Rows are reaggregated by LSOA 2021 code (summing weighted counts and populations).
-4. Rates are recomputed from the disaggregated numerators and denominators. Rates are never disaggregated directly.
+1. Join each LSOA 2011 row to the crosswalk for that output year.
+2. Multiply absolute counts and the intermediate LSOA 2011 population by the crosswalk weight. Rates are never disaggregated directly.
+3. Reaggregate weighted values by LSOA 2021 with `min_count=1`, so an all-missing metric remains missing rather than becoming zero.
+4. Replace the crosswalked population with that year's LSOA 2021 population. Employment and crime counts remain fixed; health counts are re-derived so the estimated prevalence rate remains fixed.
+5. At LSOA level, set each metric's covered population to `pop` when its count exists and to missing otherwise, then compute `rate = count / <count>_pop`.
 
-The 6 complex-change LSOAs are excluded from the output.
+The six complex-change source LSOAs and their six target LSOAs are excluded, so the release contains 33,749 of England's 33,755 LSOA 2021 areas.
 
 ## Geographic Aggregation
 
-After the crosswalk, data is aggregated from LSOA 2021 to three higher geographies using ONS lookup tables:
+The LSOA 2021 outputs are rolled up through ONS lookup tables to:
 
-- **LAD (Local Authority District):** 296 areas. LSOA-to-LAD lookup (`LSOA21_WD25_LAD25_EW_LU`).
-- **Region:** 9 English regions. LAD-to-Region lookup (`LAD25_RGN25_EN_LU`).
-- **England:** Single national total.
+- **LAD (Local Authority District):** 296 areas.
+- **Region:** 9 English regions.
+- **England:** one national total.
 
-At each level, absolute counts and populations are summed, and rates are recomputed as `count / pop`. This ensures rates at higher geographies are properly population-weighted averages of LSOA-level rates, not simple arithmetic means.
+At each level the pipeline sums counts, full `pop`, and every metric-specific `<count>_pop` separately with `min_count=1`. A published rate is always `count / <count>_pop`. It is therefore the population-weighted rate over measured LSOAs; `pop` remains the full area population and can be larger when a metric has incomplete coverage.
 
 ## Output Structure
 
-Final outputs are organised by geography level and domain:
+Final pipeline outputs are organised by geography level and domain:
 
 ```
 store/outputs/{run_name}/
@@ -181,18 +184,20 @@ store/outputs/{run_name}/
   england/{domain}/{domain}_{year_key}.csv
 ```
 
-All output files include both absolute counts and population alongside rates, enabling further aggregation or recomputation by downstream consumers. The health domain uses QOF year keys (e.g. `health_2021_22.csv`); employment and crime use calendar years (e.g. `claimant_counts_2022.csv`, `crime_2022.csv`).
+Every count is accompanied by its metric-specific population and rate, while `pop` records the area's full ONS population. The health domain uses QOF year keys (e.g. `health_2021_22.csv`); employment and crime use calendar years (e.g. `claimant_counts_2022.csv`, `crime_2022.csv`). The site/download publishing step applies the documented health quality adjustments and omits the three incomplete historical QOF groups.
 
 ## Known Limitations
 
-- **LSOA 2011 population fallback:** For years after 2020, the LSOA 2011 mid-year population series is unavailable from Nomis. The pipeline uses the 2020 estimate as a fallback. Population changes at the LSOA 2011 level between 2020 and later years are not captured in the domain processing step, though they are reflected in the LSOA 2021 populations used after the crosswalk.
+- **Claimant Count definition and rounding:** The measure is JSA plus the relevant UC component, not the total UC caseload and not unique people over a year. Nomis rounds each monthly stock independently to the nearest five, so low-count annual means can be rounded upward or downward.
 
-- **Suppressed claimant counts:** Nomis suppresses monthly counts below 5, which are treated as zero. This biases claimant rates slightly downward for LSOAs with very low counts.
+- **Crime source coverage:** Missing-LSOA incidents are dropped. British Transport Police is excluded because passenger exposure is not a resident denominator. Incomplete territorial force-years are published as missing over the affected footprints, with aggregate rates based on metric-specific covered populations.
 
-- **Crime data completeness:** Some police forces have periods of incomplete reporting. Incidents with missing LSOA codes are dropped. The pipeline does not attempt to impute unreported crimes.
+- **QOF coverage and interpolation:** Covered-practice weights are renormalised and source estimates below 80% disease-specific registration coverage are withheld. Interior gaps of at most two years may be interpolated, but endpoint and longer gaps remain missing.
 
-- **QOF coverage variation:** Not all disease groups are tracked in every year. The temporal interpolation fills gaps of up to 2 consecutive years, but longer gaps remain as missing data. Disease group definitions may also shift slightly across QOF eras.
+- **QOF measurement and comparability:** QOF reflects GP-diagnosed and recorded disease, so it understates underdiagnosed conditions and varies with recording practice. NHS Digital warns that 2020-21 implementation changes affect comparisons, particularly for obesity, asthma and COPD; this is not evidence of a uniform fall across all conditions.
 
-- **Complex LSOA changes:** The 6 LSOAs with complex (many-to-many) boundary changes between LSOA 2011 and LSOA 2021 are excluded from the output.
+- **Health quality exclusions:** Impossible prevalence rates and documented implausible EP/HF spikes are rejected to missing. Depression 2024 and osteoporosis 2015 are interpolated only where both adjacent-year anchors exist. Aggregate metric populations exclude missing LSOAs.
 
-- **Health prevalence as a proxy:** QOF prevalence reflects conditions diagnosed and recorded by GPs. It underestimates true prevalence for conditions that are underdiagnosed (e.g. dementia, depression) and may be influenced by variation in GP recording practices across areas.
+- **Population availability:** Domain processing uses the 2020 LSOA 2011 population after 2020, but target-vintage outputs use per-year LSOA 2021 population through 2024. The 2025 release repeats the 2024 population estimate.
+
+- **Complex LSOA changes:** Six many-to-many boundary changes are excluded, leaving 33,749 of 33,755 English LSOA 2021 areas.

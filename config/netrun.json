@@ -34,7 +34,7 @@
       },
       {
         "name": "fetch_claimant_counts",
-        "description": "Download Universal Credit claimant count data from Nomis.",
+        "description": "Download Claimant Count data (JSA plus the relevant Universal Credit component) from Nomis.",
         "execution_config": {
           "run_on_init": true
         },

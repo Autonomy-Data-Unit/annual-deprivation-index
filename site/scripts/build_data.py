@@ -638,8 +638,10 @@ COUNT SEMANTICS
   relevant Universal Credit component: UC claimants not in employment early in
   the series, then those in the `Searching for Work` conditionality regime from
   April 2015. The same person can appear in both components. Nomis independently
-  rounds each monthly observation to the nearest five before download. The annual
-  value is therefore neither unique claimants nor a sum of monthly values.
+  rounds each monthly observation to the nearest five before download, so the
+  annual mean can be slightly above or below the unrounded value, with the
+  largest relative effects in low-count areas. It is neither a unique-person
+  count nor a sum of monthly values.
 
   Crime counts are annual police-recorded street incidents assigned or apportioned
   to LSOAs. British Transport Police incidents are excluded. They are not a survey
@@ -648,9 +650,9 @@ COUNT SEMANTICS
   Health `_afflicted` values are modelled estimates, not observed resident counts.
   They combine published GP-practice QOF prevalence with LSOA GP-registration
   patterns; fractional people are therefore expected. Source gaps of at most two
-  consecutive years may be filled along an LSOA series (linear interpolation for
-  interior gaps, regression extrapolation at an end). The CSV has no per-cell flag
-  distinguishing those filled estimates.
+  consecutive years are filled only when they are interior gaps bounded by an
+  observation on each side. Leading and trailing gaps remain blank. The CSV has
+  no per-cell flag distinguishing those interpolated estimates.
 
 YEARS
   Employment and crime use calendar years. Health uses QOF financial years and is
@@ -664,15 +666,17 @@ AVAILABILITY AND ADJUSTMENTS
   and the City of London are also blank. Region and England rows remain available
   on their reduced metric-specific coverage populations.
 
-  Three LSOAs (Camden 028D, Tower Hamlets 015B and Westminster 018C) have no
-  health values in 2014. Non-diabetic hyperglycaemia (NDH) is blank through 2020
-  and also blank for 16 LSOAs in its first year, 2021. Eight LSOA epilepsy (EP)
-  values in 2016 and seven LSOA heart-failure (HF) values in 2021 were rejected
-  as implausible one-year spikes; aggregate coverage excludes those values.
+  At the health series endpoints, source values that cannot be bracketed by two
+  observations remain blank: 64 LSOAs have no health values in 2014, one has none
+  in 2024, and two have none in 2025. Non-diabetic hyperglycaemia (NDH) is blank
+  through 2020 and also blank for 16 LSOAs in its first year, 2021. Eight LSOA
+  epilepsy (EP) values in 2016 and seven LSOA heart-failure (HF) values in 2021
+  were rejected as implausible one-year spikes; aggregate coverage excludes them.
 
-  Depression (DEP) in 2024 is interpolated from adjacent LSOA rates. Osteoporosis
-  (OST) in 2015 is likewise interpolated for 33,746 LSOAs; the three LSOAs without
-  a 2014 anchor remain blank. Both corrected metrics are reaggregated from LSOAs.
+  Depression (DEP) in 2024 is interpolated from adjacent LSOA rates where both
+  exist; two LSOAs without both anchors remain blank. Osteoporosis (OST) in 2015
+  is likewise interpolated where both anchors exist; 64 LSOAs without a 2014
+  anchor remain blank. Both corrected metrics are reaggregated from LSOAs.
 
   NHS Digital warns that QOF 2020-21 implementation changes may make indicator
   values inaccurate and comparisons with earlier years unreliable. Obesity was
@@ -822,7 +826,8 @@ def _data_dictionary(level: str) -> pd.DataFrame:
         "source": "Nomis NM_162_1",
         "availability_and_adjustments": (
             "Calendar years; no metric-specific gaps. Nomis rounds monthly observations "
-            "to the nearest 5; JSA/UC double counting is possible"
+            "to the nearest 5, so rounding can move an annual mean up or down; "
+            "JSA/UC double counting is possible"
         ),
     }]
     for label, key in CRIME_TYPES:
@@ -851,7 +856,7 @@ def _data_dictionary(level: str) -> pd.DataFrame:
         count_col = f"{code}_afflicted"
         notes = [
             "QOF financial year labelled by ending year",
-            "3 LSOAs lack all health metrics in 2014",
+            "endpoint source gaps remain blank rather than being extrapolated",
         ]
         if code == "NDH":
             notes.append("blank through 2020; 16 LSOAs also blank in 2021")
@@ -860,10 +865,10 @@ def _data_dictionary(level: str) -> pd.DataFrame:
         if code == "HF":
             notes.append("7 implausible LSOA values rejected in 2021")
         if code == "DEP":
-            notes.append("2024 LSOA rates interpolated from 2023 and 2025")
+            notes.append("2024 rates interpolated only where both adjacent-year anchors exist")
         if code == "OST":
             notes.append(
-                "2015 rates interpolated for 33,746 LSOAs; 3 without a 2014 anchor remain blank"
+                "2015 rates interpolated only where both adjacent-year anchors exist"
             )
         rows.append({
             **common,
@@ -875,7 +880,7 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             "count_definition": (
                 "Modelled LSOA-resident estimate from GP-practice QOF prevalence and "
                 "LSOA GP-registration patterns; not an observed patient count; short "
-                "source gaps may be interpolated or extrapolated"
+                "interior source gaps may be interpolated, while endpoint gaps remain blank"
             ),
             "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
             "rate_column": f"{count_col}_rate",
@@ -1121,7 +1126,7 @@ def metric_series_for_level(lv, domain, metric_key):
 
 # metric definitions
 def domain_metrics():
-    emp = [{"key": "claimant_rate", "label": "Universal Credit claimant rate", "fmt": "pct"}]
+    emp = [{"key": "claimant_rate", "label": "Claimant Count rate", "fmt": "pct"}]
     cri = [{"key": "total", "label": "All street crime", "fmt": "rate1k"}]
     cri += [{"key": slug, "label": name, "fmt": "rate1k"} for name, slug in CRIME_TYPES]
     hea = [{"key": code, "label": label, "fmt": "pct"} for code, label in HEALTH]
@@ -1182,20 +1187,21 @@ manifest = {
     "level_labels": {"england": "England", "region": "Region", "lad": "Local authority", "lsoa": "Neighbourhood (LSOA)"},
     "domains": {
         "employment": {"label": "Employment", "metrics": METRICS["employment"],
-                       "source": "Universal Credit claimant counts (Nomis)"},
+                       "source": "Claimant Count (Nomis NM_162_1)"},
         "crime": {"label": "Crime", "metrics": METRICS["crime"],
                   "source": "Police-recorded street crime (data.police.uk)"},
         # `note` is surfaced in the Explorer beneath the source line. The QOF
         # year offset is not cosmetic: comparing health against employment or
-        # crime for the same labelled year compares different periods, and the
-        # 2020-21 recording collapse makes the year labelled 2021 unusable for
-        # trends. Both are easy to walk into without being told.
+        # crime for the same labelled year compares different periods. NHS Digital
+        # also warns that QOF 2020-21 implementation and definition changes affect
+        # comparisons, especially for obesity, asthma and COPD.
         "health": {"label": "Health", "metrics": METRICS["health"],
                    "source": "GP disease prevalence, QOF (NHS Digital)",
-                   "note": "QOF years run April\u2013March and are labelled by the year they end, "
-                           "so health \u201c2021\u201d covers April 2020\u2013March 2021 "
-                           "(employment and crime are calendar years). Pandemic disruption to GP "
-                           "recording makes that year under-record across all conditions."},
+                   "note": "QOF years run April–March and are labelled by the year they end, "
+                           "so health ‘2021’ covers April 2020–March 2021 "
+                           "(employment and crime are calendar years). NHS Digital warns that "
+                           "QOF 2020–21 implementation and definition changes affect "
+                           "comparisons, especially for obesity, asthma and COPD."},
     },
     "counts": {lv: len(codes_by_level[lv]) for lv in LEVELS},
 }

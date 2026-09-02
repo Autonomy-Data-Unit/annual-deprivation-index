@@ -64,7 +64,7 @@
   /* ---- Domain hues (chips/labels only; maps still use --seq-*) ----------
      Restrained tints to label the three domains in chips, legends, icon
      accents — NOT for the choropleth surface.                              */
-  --domain-employment: #b8860b;  /* warm ochre  (UC claimants)              */
+  --domain-employment: #b8860b;  /* warm ochre  (Claimant Count)             */
   --domain-crime:      #6b5b95;  /* muted slate-violet (street crime)       */
   --domain-health:     #2f7d6f;  /* deep teal (GP prevalence)               */
 

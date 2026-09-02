@@ -9,7 +9,7 @@
 # %% [markdown]
 # # nodes.fetch_claimant_counts
 #
-# Download Universal Credit claimant count data from the Nomis REST API.
+# Download Claimant Count data (JSA plus the relevant Universal Credit component) from the Nomis REST API.
 # Saves one CSV per year to `store/inputs/claimant_counts/claimant_counts_{year}.csv`,
 # containing all 12 monthly counts for that year.
 # Idempotent: skips years where the file already exists.
@@ -25,7 +25,7 @@ from adi import const
 # %%
 #|set_func_signature
 async def main(ctx, print) -> bool:
-    """Download Universal Credit claimant count data from Nomis."""
+    """Download Claimant Count data (JSA plus the relevant UC component) from Nomis."""
     ...
 
 # %% [markdown]

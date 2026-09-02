@@ -33,7 +33,7 @@
       </div>
       <div>
         <h2>Sources</h2>
-        <span>UC claimant counts · Nomis</span>
+        <span>Claimant Count · Nomis</span>
         <span>Street crime · data.police.uk</span>
         <span>Disease prevalence · NHS QOF</span>
         <span>Boundaries · ONS</span>

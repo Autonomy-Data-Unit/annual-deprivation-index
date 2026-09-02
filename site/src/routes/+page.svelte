@@ -97,7 +97,7 @@
         markers={[{ x: 2020, label: 'COVID-19', color: '#9c4a22' }, { x: 2015, label: 'IMD 2015', color: 'var(--grey-2)' }, { x: 2019, label: 'IMD 2019', color: 'var(--grey-2)' }, { x: 2025, label: 'IMD 2025', color: 'var(--grey-2)' }]}
         showLegend={false}
       />
-      <p class="muted small">Universal Credit claimant rate, England. The IMD published three snapshots (2015, 2019, 2025) across this period.</p>
+      <p class="muted small">Claimant Count rate (JSA plus the relevant UC component), England. The IMD published three snapshots (2015, 2019, 2025) across this period.</p>
     </div>
     <div class="card">
       <p class="eyebrow">Employment · {dash.latest_year}</p>
@@ -119,7 +119,7 @@
   <p class="eyebrow">Three domains</p>
   <div class="grid three">
     {#each [
-      { d: 'employment', title: 'Employment', desc: 'Universal Credit claimant counts from Nomis: who is out of work and claiming support.', series: claimant.values, fmt: (v) => (v*100).toFixed(0)+'%' },
+      { d: 'employment', title: 'Employment', desc: 'Claimant Count from Nomis: JSA plus the relevant component of Universal Credit.', series: claimant.values, fmt: (v) => (v*100).toFixed(0)+'%' },
       { d: 'crime', title: 'Crime', desc: 'Police-recorded street crime across 14 categories from data.police.uk.', series: crime.values, fmt: (v) => (v*1000).toFixed(0) },
       { d: 'health', title: 'Health', desc: `GP-recorded disease prevalence across ${healthConditionCount} conditions, from the NHS QOF.`, series: dep.values, fmt: (v) => (v*100).toFixed(0)+'%' }
     ] as c}

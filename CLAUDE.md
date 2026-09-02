@@ -4,7 +4,7 @@
 
 **annual-deprivation-index-v2** (ADI v2) is a productionised rewrite of the Annual Deprivation Index, a multi-domain deprivation index for England that provides **annual** measurements at the LSOA (Lower Layer Super Output Area) level. It complements the government's Index of Multiple Deprivation (IMD), which is only updated every few years, by using annually-available administrative data sources.
 
-The pipeline produces three independent domain sub-indices — **employment** (Universal Credit claimant counts), **crime** (police-recorded street crime), and **health** (GP-level disease prevalence mapped to LSOAs via patient registration data) — output as a multi-index at four geography levels (LSOA, LAD, Region, England). The pipeline does not combine these into a single composite score; that is left to downstream analysis.
+The pipeline produces three independent domain sub-indices — **employment** (the Claimant Count: Jobseeker's Allowance plus the relevant Universal Credit component), **crime** (police-recorded street crime), and **health** (GP-level disease prevalence mapped to LSOAs via patient registration data) — output at four geography levels (LSOA, LAD, Region, England). The pipeline does not combine these into a single composite score; that is left to downstream analysis.
 
 The old repo at `/Users/lukas/dev/20250623_000000_rLaVV__annual-deprivation-index/old_repo/` used manual Jupyter notebooks and spatial intersection for health estimation. This rewrite uses **netrun** for orchestration, **nblite** for literate programming, and direct GP-LSOA patient registration data (no spatial computation needed).
 
@@ -23,23 +23,25 @@ The binding constraint is the GP-LSOA patient registration data (starts April 20
 
 **Earliest year with all three domains: 2014.** Default `year_start` is 2014.
 
-For years 2021+, LSOA 2011 population data is unavailable from Nomis; the *domain processing* step falls back to the 2020 estimate. The published outputs are unaffected: `aggregate` re-denominates against the real per-year LSOA 2021 estimate (`load_lsoa21_population`).
+For years 2021+, LSOA 2011 population data is unavailable from Nomis; the *domain processing* step falls back to the 2020 estimate. The `aggregate` node replaces it with the publication year's LSOA 2021 estimate and uses that same year to weight split LSOAs. The exception is 2025, whose population file repeats 2024 because NM_2014_1 ends in 2024.
 
 ## Data Sources
 
-### Employment Domain: Claimant Counts
+### Employment Domain: Claimant Count
 
-- **Source:** [Nomis](https://www.nomisweb.co.uk/datasets/ucjsa) — Universal Credit claimant counts
-- **Dataset:** `NM_162_1`, geography `TYPE298` (LSOA 2011). Historical data is only available at LSOA 2011.
+- **Source:** [Nomis](https://www.nomisweb.co.uk/datasets/ucjsa) dataset `NM_162_1` — the Claimant Count, not the total Universal Credit caseload. It combines JSA with UC claimants recorded as not in employment early in the series and those in the `Searching for Work` conditionality regime from April 2015; simultaneous JSA/UC claims can be counted twice.
+- **Geography:** `TYPE298` (LSOA 2011). Historical data is unavailable at LSOA 2021.
 - **Download:** Nomis REST API, paginated at 25k rows. No auth required.
-- **Granularity:** Monthly counts per LSOA, averaged to annual by the processing node.
-- **Notes:** Welsh LSOAs filtered. Nomis suppresses counts below 5 (returned as empty); treated as 0.
+- **Granularity:** Monthly stock counts per LSOA, averaged over 12 months to an annual mean.
+- **Rounding:** Nomis independently rounds every monthly observation to the nearest five. Published zeroes are rounded values, not blank suppression. Rounding can move annual and aggregate values either upward or downward, with the largest relative effect in low-count areas.
+- **Filtering:** Welsh LSOAs are removed. The audited 2014--2025 source files contain no missing Claimant Count observations.
 
 ### Crime Domain
 
-- **Source:** [data.police.uk](https://data.police.uk/data/archive/)
-- **Download:** Archive ZIPs at `https://data.police.uk/data/archive/{YYYY}-{MM}.zip` (~1.6 GB each, 36-month rolling window). No auth required.
-- **Granularity:** Per-incident with LSOA 2011 codes, aggregated to annual counts per LSOA per crime type (14 types).
+- **Source:** [data.police.uk](https://data.police.uk/data/archive/) monthly street-crime archives (~1.6 GB, 36-month rolling window).
+- **Coverage:** A territorial force-year is usable only when all 12 monthly files are present and non-empty. Incomplete force footprints remain missing rather than becoming partial annual totals. Greater Manchester is missing from 2019--2025; the Devon & Cornwall footprint and City of London are also missing in 2022.
+- **Exclusion:** British Transport Police is excluded because its national passenger network has no resident-area denominator.
+- **Granularity:** Incidents with LSOA codes are aggregated to annual counts per LSOA and crime type (14 types). Recent LSOA 2021 police codes are mapped back to their LSOA 2011 parent before processing.
 
 ### Health Domain
 
@@ -93,27 +95,33 @@ All idempotent — skip files that already exist. Use `asyncio.gather()` for wit
 
 ### Processing Nodes (3)
 
-All output in **LSOA 2011** vintage (source data constraint). Include both absolute counts and populations for crosswalk compatibility.
+All intermediate processing outputs are in **LSOA 2011** vintage.
 
-**`process_claimant_counts`**: Load monthly Nomis data, filter Welsh LSOAs, average to annual, merge with LSOA 2011 population, compute `claimant_rate = count / pop`. Output: `LSOA11CD, LSOA11NM, claimant_count, pop, claimant_rate`.
+**`process_claimant_counts`**: Load 12 monthly Nomis observations, filter Welsh LSOAs, average to an annual stock count, merge LSOA 2011 population, and compute the intermediate rate. Output: `LSOA11CD, LSOA11NM, claimant_count, pop, claimant_rate`.
 
-**`process_crime`**: Concatenate monthly per-force street CSVs, filter Welsh/null LSOAs, aggregate by LSOA and crime type, merge with population, compute per-capita rates. Output: `LSOA11CD, LSOA11NM, {14 crime type counts}, pop, {14 crime type rates}`.
+**`process_crime`**: Validate force-month completeness, exclude BTP, concatenate monthly territorial-force files, normalise recent LSOA codes, filter Welsh/null LSOAs, aggregate 14 crime types, and leave incomplete force footprints missing. Output: `LSOA11CD, LSOA11NM, {14 counts}, pop, {14 rates}`.
 
-**`process_health`**: The most complex node. Steps:
-1. **Normalise QOF data** using config-driven schema mapping (`config/qof_schemas.toml`)
-2. **Load GP-LSOA patient registrations** for the matching April edition
-3. **Estimate LSOA prevalence**: For each LSOA, weight = (patients from this LSOA at GP k) / (total patients at GP k). LSOA prevalence = weighted average of each GP's disease register / list population.
-4. **Temporal interpolation** across years (vectorised): fill NaN gaps of ≤2 consecutive years via linear interpolation (interior) or linear regression extrapolation (leading/trailing).
+**`process_health`**:
 
-Output: `LSOA11CD, {21 disease}_prevalence_rate, {21 disease}_afflicted, list_pop, pop`.
+1. Normalise QOF data using `config/qof_schemas.toml`; genuinely missing practice registers remain missing rather than becoming zero.
+2. Load GP-LSOA registrations for the matching April edition.
+3. For each LSOA and disease, keep practices with a usable QOF register and list size, renormalise patient weights over those **covered practices**, and compute their weighted prevalence. The covered practices need not contain all of the LSOA's registrations. A disease estimate with less than 80% registration coverage is withheld.
+4. Reject estimated prevalence outside [0, 1] to missing.
+5. Fill only interior gaps of at most two years by linear interpolation. Leading, trailing, and longer gaps remain missing; there is no endpoint extrapolation.
+6. Derive afflicted counts as `prevalence_rate * pop`.
+
+Output: `LSOA11CD, pop, {disease}_prevalence_rate, {disease}_afflicted, qof_coverage`. There is no `list_pop` output column.
 
 ### Aggregate Node
 
-1. **Build crosswalk**: LSOA 2011 → LSOA 2021 using exact-fit lookup. Unchanged (U): weight 1.0. Splits (S): weight by LSOA 2021 population proportion. Merges (M): weight 1.0 (values summed). Complex (X): excluded.
-2. **Apply crosswalk**: Disaggregate absolute counts using weights, reaggregate to LSOA 2021, recompute rates. All sums use `min_count=1` so a column that was never collected (e.g. QOF `SMOK` after 2013-14) stays NaN instead of collapsing to 0.
-2b. **Re-denominate**: Replace the crosswalked 2011-vintage population with the real LSOA 2021 mid-year estimate for that year. Employment/crime counts are kept and rates recomputed; health counts are re-derived from the fixed prevalence rate.
-3. **Geographic aggregation**: Sum counts and populations to LAD (296), Region (9), England (1). Recompute rates at each level.
-4. **Output**: `store/outputs/{run_name}/{lsoa,lad,region,england}/{domain}/{file}.csv`
+1. **Build a crosswalk per output year:** LSOA 2011 → LSOA 2021 using exact-fit lookup. Unchanged (U) and merged (M) rows have weight 1.0; split (S) weights use that publication year's LSOA 2021 population shares; complex (X) rows are excluded.
+2. **Apply the crosswalk:** Disaggregate absolute counts and intermediate population, reaggregate to LSOA 2021 with `min_count=1`, and never disaggregate rates directly.
+3. **Reset target population:** Replace crosswalked LSOA 2011 population with the same year's LSOA 2021 population. Employment/crime counts remain fixed; health counts are re-derived so prevalence remains fixed.
+4. **Add metric-specific denominators:** `pop` is the whole area's all-age ONS population. Every count carries `<count>_pop`, the population of LSOAs where that metric exists, and `<count>_rate = <count> / <count>_pop`.
+5. **Aggregate:** Sum counts, `pop`, and metric-specific populations from LSOA to LAD (296), Region (9), and England (1), then recompute rates from metric-specific denominators.
+6. **Output:** `store/outputs/{run_name}/{lsoa,lad,region,england}/{domain}/{file}.csv`.
+
+The site/download publishing step then rejects eight implausible epilepsy LSOA values in 2016 and seven heart-failure values in 2021 to missing, rebuilds higher levels from LSOAs, interpolates the known DEP 2024 and OST 2015 basis-change years only where both anchors exist, and excludes CVDPP/SMOK/THY from the published 21-condition release.
 
 ### Storage Convention
 
@@ -171,7 +179,7 @@ Output: `LSOA11CD, {21 disease}_prevalence_rate, {21 disease}_afflicted, list_po
 - **nblite** (>=1.1.12) — Literate programming
 - **pandas** — Data manipulation
 - **numpy** — Numerical operations
-- **scipy** — Linear regression for temporal interpolation
+- **scipy** — Statistical analysis in the site data build
 - **httpx** — Async HTTP for all downloads and scraping
 - **beautifulsoup4** — HTML parsing for NHS Digital pages
 - **geopandas** / **shapely** — LSOA boundary download (not used for health estimation)
@@ -180,7 +188,7 @@ Output: `LSOA11CD, {21 disease}_prevalence_rate, {21 disease}_afflicted, list_po
 ## Running the Pipeline
 
 ```bash
-uv run run-pipeline default     # Full run (2014-2024)
+uv run run-pipeline default     # Full run (2014-2025)
 uv run run-pipeline test        # Quick test (2022-2023)
 ```
 
@@ -189,7 +197,7 @@ Run definitions in `config/run_defs.toml`:
 [defaults]
 lsoa_vintage = "2021"
 year_start = 2014
-year_end = 2024
+year_end = 2025
 
 [runs.test]
 year_start = 2022
@@ -219,18 +227,18 @@ uv run run-pipeline test             # Quick integration test
 - Access config via `ctx.vars["var_name"]` (never `.get()`)
 - Use bare `await` in notebooks (never `asyncio.run()`)
 
-## LSOA Vintage and Crosswalk
+## LSOA Vintage, Crosswalk and Denominators
 
-Domain processors output in **LSOA 2011** (source data constraint). The `aggregate` node converts to **LSOA 2021** using a population-weighted crosswalk:
+Domain processors output in **LSOA 2011**. For every output year, `aggregate` builds a separate LSOA 2011 → LSOA 2021 crosswalk weighted from that same year's target population:
 
 | Change | Count | Method |
 |---|---|---|
 | Unchanged (U) | 33,647 | Direct 1:1 mapping, weight = 1.0 |
-| Split (S) | 861 → 1,900 | Weight by LSOA 2021 population proportion |
+| Split (S) | 861 → 1,900 | Target LSOA 2021 population share in the publication year |
 | Merged (M) | 239 → 119 | Sum values, weight = 1.0 |
 | Complex (X) | 6 → 6 | Excluded |
 
-Crosswalk is applied to **absolute counts and populations separately**. Rates are recomputed after disaggregation. Never disaggregate rates directly.
+Absolute counts and intermediate population are crosswalked separately; rates are never disaggregated. After the crosswalk, `pop` is reset to the output year's target-vintage ONS population. Each count then receives a `<count>_pop` coverage denominator, and its rate is recomputed as `count / <count>_pop`. At higher levels, counts and their coverage populations are summed together, so missing LSOAs contribute to neither side of a rate.
 
 ## QOF Schema Normalisation
 
@@ -250,4 +258,4 @@ Pre-2013 (Excel format) is not supported; the GP-LSOA data doesn't exist for tho
 - **No silent fallbacks:** Use `d["key"]`, never `.get(key, default)`.
 - **Node variables:** Defaults in `run_defs.toml`, types in `netrun.json`. Access via `ctx.vars["var_name"]`.
 - **Idempotent nodes:** All fetch and process nodes skip work if output already exists.
-- **Counts + populations:** Domain outputs always include absolute counts AND population columns, never just rates.
+- **Counts + populations:** Final outputs carry every count, the whole-area `pop`, the count's metric-specific `<count>_pop`, and the reproducible rate `count / <count>_pop`.

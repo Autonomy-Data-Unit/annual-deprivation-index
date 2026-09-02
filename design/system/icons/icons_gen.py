@@ -2,7 +2,7 @@
 """ADI domain line-icons — true-vector, hand-authored on a 24px grid.
 
 Three domain icons matching ADU's golden line-icon style:
-  employment → briefcase   (UC claimant counts)
+  employment → briefcase   (Claimant Count)
   crime      → shield      (police-recorded street crime)
   health     → heart + pulse (GP disease prevalence)
 

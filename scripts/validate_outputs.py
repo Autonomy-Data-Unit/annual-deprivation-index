@@ -183,9 +183,9 @@ POP_JUMP = 0.20           # tolerated year-on-year population change
 #
 # The claimant domain is deliberately EXCLUDED. It is a single Nomis
 # administrative extract with no per-area reporting body that can drop out, and
-# the Universal Credit rollout genuinely re-ranked areas between 2014 and 2020 —
-# Stratford-on-Avon really does sit at 0.43 of its own median in 2015. Including
-# it would produce 46 findings, every one of them a true feature of the series.
+# the rollout of the Claimant Count's Universal Credit component genuinely re-ranked
+# areas. Stratford-on-Avon really does sit at 0.43 of its own median in 2015.
+# Including it would produce 46 findings, all true features of the series.
 REL_LEVEL_DOMAINS = ("crime", "health")
 REL_LEVEL_BLOCK = 0.35    # collapse: Buckinghamshire QOF 2017-18 scored 0.056
 REL_LEVEL_WARN = 0.55     # partial coverage: Greater Manchester 2019 scored ~0.50

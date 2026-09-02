@@ -202,12 +202,12 @@ plt.show()
 # %% [markdown]
 # ## Interpretation
 #
-# **Employment domain (r = 0.82–0.87):** The ADI's claimant count rate is a
+# **Employment domain (r = 0.82–0.87):** The ADI's Claimant Count rate is a
 # strong proxy for the IMD's Employment Deprivation domain. Both capture
-# worklessness, though through different measures (Universal Credit claimants
-# vs ILO unemployment + incapacity benefits). The slight decline from 0.87
-# (2019) to 0.82 (2025) may reflect the shift from legacy benefits to
-# Universal Credit changing the relationship.
+# worklessness through different measures (Claimant Count: JSA plus the relevant
+# Universal Credit component, versus ILO unemployment and incapacity benefits).
+# The slight decline from 0.87 (2019) to 0.82 (2025) may reflect Universal Credit
+# rollout changing the composition of the Claimant Count.
 #
 # **Crime domain (r = 0.58–0.70):** Moderate correlation that has been
 # declining over time. The IMD Crime domain uses a modelled rate accounting
