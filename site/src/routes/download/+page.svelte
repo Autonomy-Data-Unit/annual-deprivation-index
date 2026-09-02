@@ -37,7 +37,7 @@
         <li>
           <a class="dl__link" href="{base}/{b.file}" download>
             <span class="dl__label">{b.label}</span>
-            <span class="dl__meta">{b.areas.toLocaleString()} {b.areas === 1 ? 'area' : 'areas'} · ZIP, {b.size}</span>
+            <span class="dl__meta">{b.areas.toLocaleString()} {b.areas === 1 ? 'area' : 'areas'} · ZIP, {b.size}{b.level === 'lsoa' ? ' · about 350 MiB extracted' : ''}</span>
           </a>
         </li>
       {/each}
@@ -57,8 +57,10 @@
       it ends, so health <em>2021</em> covers April 2020–March 2021. Employment and crime are calendar years.</li>
     <li><strong>Gaps are empty cells, never zeros.</strong> Greater Manchester has no street crime from 2020
       onward; national and regional crime rates are computed from reporting areas only.</li>
-    <li><strong>Health figures for 2021 under-record.</strong> Pandemic disruption to GP recording depressed
-      every QOF register that year. Not recommended for trend analysis.</li>
+    <li><strong>Health figures for 2021 are not comparable with earlier years.</strong> QOF implementation
+      changed during the pandemic, and NHS Digital warns that indicator data may be inaccurate. In the current
+      England series, 10 of 20 comparable condition rates rose and 10 fell; obesity fell sharply while depression
+      rose. Do not use 2021 as a like-for-like trend point.</li>
     <li><strong>Smoking is not included</strong>, at any year after 2013-14 — NHS Digital stopped publishing
       it as a QOF prevalence group, along with hypothyroidism and CVD primary prevention.</li>
   </ul>
