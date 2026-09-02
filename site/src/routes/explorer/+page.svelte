@@ -153,11 +153,11 @@
 
 <div class="explorer">
   <!-- controls -->
-  <aside class="panel panel--controls">
-    <h2 class="panel__h">Map explorer</h2>
+  <aside class="panel panel--controls" aria-labelledby="explorer-heading">
+    <h1 id="explorer-heading" class="panel__h">Map explorer</h1>
 
-    <div class="field">
-      <label class="field__lbl">Geography</label>
+    <div class="field" role="group" aria-labelledby="geography-label">
+      <span id="geography-label" class="field__lbl">Geography</span>
       <div class="seg">
         {#each [['region','Region'],['lad','Local authority'],['lsoa','Neighbourhood']] as [v,l]}
           <button aria-pressed={level === v} onclick={() => setLevel(v)}>{l}</button>
@@ -165,8 +165,8 @@
       </div>
     </div>
 
-    <div class="field">
-      <label class="field__lbl">Domain</label>
+    <div class="field" role="group" aria-labelledby="domain-label">
+      <span id="domain-label" class="field__lbl">Domain</span>
       <div class="dseg">
         {#each ['employment','crime','health'] as d}
           <button class="dbtn" aria-pressed={domain === d} style:--h={DOMAIN_HUES[d]} onclick={() => setDomain(d)}>
@@ -221,10 +221,10 @@
   </div>
 
   <!-- detail -->
-  <aside class="panel panel--detail">
+  <aside class="panel panel--detail" aria-label="Area details">
     {#if detail}
       <p class="eyebrow">{mani.level_labels[level]}</p>
-      <h3 class="detail__name">{detail.name}</h3>
+      <h2 class="detail__name">{detail.name}</h2>
       {#if detail.parents?.region}<p class="muted small">{detail.parents.lad ? detail.parents.lad.name + ' · ' : ''}{detail.parents.region.name}</p>{/if}
 
       <div class="detail__big">

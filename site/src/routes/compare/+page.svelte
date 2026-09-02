@@ -145,17 +145,18 @@
           <button class="dbtn" aria-pressed={domain===d} style:--h={DOMAIN_HUES[d]} onclick={()=>setDomain(d)}><DomainIcon domain={d} size={16}/> {mani.domains[d].label}</button>
         {/each}
       </div>
-      <select bind:value={metricKey}>{#each metrics as m}<option value={m.key}>{m.label}</option>{/each}</select>
+      <label class="visually-hidden" for="compare-metric">Measure</label>
+      <select id="compare-metric" bind:value={metricKey}>{#each metrics as m}<option value={m.key}>{m.label}</option>{/each}</select>
     </div>
 
     <div class="card">
-      <h4 class="card__title">{metricDef?.label} over time</h4>
+      <h2 class="card__title">{metricDef?.label} over time</h2>
       <LineChart x={years} series={chartSeries} yFormat={(v)=> metricDef?.fmt==='pct' ? (v*100).toFixed(0)+'%' : (v*1000).toFixed(0)} yZero width={860} height={320} />
     </div>
 
     <!-- latest-year snapshot table -->
     <div class="card snapshot">
-      <h4 class="card__title">Snapshot · {years[yi]}</h4>
+      <h2 class="card__title">Snapshot · {years[yi]}</h2>
       <div class="table-scroll">
         <table class="data-table">
           <thead><tr><th>Area</th><th class="num">Claimant rate</th><th class="num">All crime /1k</th><th class="num">Depression</th><th class="num">Population</th></tr></thead>

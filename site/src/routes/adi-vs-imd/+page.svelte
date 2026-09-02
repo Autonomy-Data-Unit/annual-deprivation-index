@@ -59,7 +59,7 @@
   <h2><span class="sec">a</span> What each one measures</h2>
   <div class="cmp">
     <table class="data-table cmp__t">
-      <thead><tr><th></th><th>IMD (Indices of Deprivation)</th><th>ADI (Annual Deprivation Index)</th></tr></thead>
+      <thead><tr><th><span class="visually-hidden">Feature</span></th><th>IMD (Indices of Deprivation)</th><th>ADI (Annual Deprivation Index)</th></tr></thead>
       <tbody>
         <tr><th>Domains</th><td>7: income, employment, education, health, crime, housing, living environment</td><td>3: employment, crime, health</td></tr>
         <tr><th>Measure</th><td>Relative <strong>rank</strong> (1 = most deprived)</td><td>Absolute <strong>rate</strong> (e.g. % claiming)</td></tr>
@@ -79,7 +79,7 @@
 
   <div class="corr-cards">
     {#each ['employment','crime','health'] as d}
-      <button class="corr-card" class:on={corrTab===d} style="--h:{DOMAIN_HUES[d]}" onclick={()=>corrTab=d}>
+      <button class="corr-card" class:on={corrTab===d} aria-pressed={corrTab===d} style="--h:{DOMAIN_HUES[d]}" onclick={()=>corrTab=d}>
         <span class="corr-card__r num">{corr[2019][d]?.toFixed(2)}</span>
         <span class="corr-card__d">{corrLabels[d]}</span>
         <span class="corr-card__s">{strengthWord(corr[2019][d])} correlation</span>
@@ -95,13 +95,13 @@
     </div>
     <div class="corr-text">
       {#if corrTab==='employment'}
-        <h4>Employment: strong (r≈{corr[2019].employment.toFixed(2)})</h4>
+        <h3>Employment: strong (r≈{corr[2019].employment.toFixed(2)})</h3>
         <p>The ADI's Claimant Count rate is a strong proxy for the IMD's Employment domain. Both capture worklessness through different lenses: administrative claims in the Claimant Count (JSA plus the relevant UC component) versus the IMD's unemployment and incapacity-benefit measures.</p>
       {:else if corrTab==='crime'}
-        <h4>Crime: moderate (r≈{corr[2019].crime.toFixed(2)})</h4>
+        <h3>Crime: moderate (r≈{corr[2019].crime.toFixed(2)})</h3>
         <p>The ADI counts raw police-recorded incidents across all 14 street-crime types; the IMD models a rate from four. Different recording and modelling choices open a gap. That divergence is useful, not error.</p>
       {:else}
-        <h4>Health: weak (r≈{corr[2019].health.toFixed(2)})</h4>
+        <h3>Health: weak (r≈{corr[2019].health.toFixed(2)})</h3>
         <p>The ADI's GP-recorded disease prevalence captures a different construct from the IMD Health domain (premature mortality, hospital admissions, disability). The weak correlation is the point: the two datasets are <strong>complementary but not redundant</strong>. The ADI surfaces chronic primary-care disease burden whereas the IMD doesn't.</p>
       {/if}
       <table class="data-table mini">
@@ -156,7 +156,7 @@
     </div>
     <div class="contra__table card">
       <div class="contra__th">
-        <h4 class="card__title">Contradictions</h4>
+        <h3 class="card__title">Contradictions</h3>
         <div class="seg sm">
           <button aria-pressed={sortKey==='cc'} onclick={()=>sortKey='cc'}>By rate rise</button>
           <button aria-pressed={sortKey==='imd'} onclick={()=>sortKey='imd'}>By rank gain</button>
@@ -197,9 +197,9 @@
 <section class="container section--tight measure-wide">
   <h2><span class="sec">e</span> Complementary, not competing</h2>
   <div class="grid three comp">
-    <div class="card"><h4>Use the IMD for…</h4><p class="small">Ranking and comparing areas at a point in time; multi-domain breadth (income, education, housing, environment); statutory funding formulas.</p></div>
-    <div class="card card--accent"><h4>Use the ADI for…</h4><p class="small">Tracking absolute change year on year; spotting shocks as they happen; knowing the true <em>level</em> of deprivation, not just the rank.</p></div>
-    <div class="card"><h4>Together…</h4><p class="small">The IMD says where an area stands relative to others; the ADI says which way it's actually moving, and how fast. Read side by side, they tell the whole story.</p></div>
+    <div class="card"><h3>Use the IMD for…</h3><p class="small">Ranking and comparing areas at a point in time; multi-domain breadth (income, education, housing, environment); statutory funding formulas.</p></div>
+    <div class="card card--accent"><h3>Use the ADI for…</h3><p class="small">Tracking absolute change year on year; spotting shocks as they happen; knowing the true <em>level</em> of deprivation, not just the rank.</p></div>
+    <div class="card"><h3>Together…</h3><p class="small">The IMD says where an area stands relative to others; the ADI says which way it's actually moving, and how fast. Read side by side, they tell the whole story.</p></div>
   </div>
   <div class="cta">
     <a class="btn btn--accent" href="{base}/explorer">Explore the data →</a>

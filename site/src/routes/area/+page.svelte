@@ -160,21 +160,23 @@
     </div>
 
     <!-- trends -->
+    <h2 class="visually-hidden">Trends</h2>
     <div class="grid trends">
       <div class="card">
-        <p class="eyebrow">Employment</p><h4 class="card__title">Claimant rate, {years[0]} to {years[yi]}</h4>
+        <p class="eyebrow">Employment</p><h3 class="card__title">Claimant rate, {years[0]} to {years[yi]}</h3>
         <LineChart x={years} series={[{label:'Claimant rate', color:DOMAIN_HUES.employment, values:rec.employment.rate}]} yFormat={(v)=>(v*100).toFixed(0)+'%'} yZero showLegend={false} markers={[{x:2020,label:'COVID',color:'#9c4a22'}]} />
       </div>
       <div class="card">
-        <p class="eyebrow">Crime</p><h4 class="card__title">All street crime per 1,000, {years[0]} to {years[yi]}</h4>
+        <p class="eyebrow">Crime</p><h3 class="card__title">All street crime per 1,000, {years[0]} to {years[yi]}</h3>
         <LineChart x={years} series={[{label:'All crime', color:DOMAIN_HUES.crime, values:rec.crime.total_rate.map(v=>v==null?null:v*1000)}]} yFormat={(v)=>v.toFixed(0)} yZero showLegend={false} />
       </div>
     </div>
 
     <!-- domain breakdowns -->
+    <h2 class="visually-hidden">Domain breakdowns</h2>
     <div class="grid two">
       <div class="card">
-        <p class="eyebrow">Crime mix · {years[yi]}</p><h4 class="card__title">By category (per 1,000)</h4>
+        <p class="eyebrow">Crime mix · {years[yi]}</p><h3 class="card__title">By category (per 1,000)</h3>
         {#if crimeBars.length}
           <BarChart items={crimeBars} format={(v)=>v.toFixed(1)} color={DOMAIN_HUES.crime} labelW={170} />
         {:else}
@@ -182,7 +184,7 @@
         {/if}
       </div>
       <div class="card">
-        <p class="eyebrow">Health · {years[yi]}</p><h4 class="card__title">Top recorded conditions (prevalence %)</h4>
+        <p class="eyebrow">Health · {years[yi]}</p><h3 class="card__title">Top recorded conditions (prevalence %)</h3>
         {#if healthBars.length}
           <BarChart items={healthBars} format={(v)=>v.toFixed(1)+'%'} color={DOMAIN_HUES.health} labelW={170} />
         {:else}
@@ -200,10 +202,10 @@
     {#if children.length}
       <div class="card drill">
         <p class="eyebrow">Drill down</p>
-        <h4 class="card__title">
+        <h2 class="card__title">
           {level === 'england' ? 'Regions' : level === 'region' ? 'Local authorities' : 'Neighbourhoods (LSOAs)'}
           <span class="muted small">· {children.length}, ranked by claimant rate</span>
-        </h4>
+        </h2>
         <div class="drill__grid">
           <table class="data-table">
             <thead><tr><th>Area</th><th class="num">Claimant rate</th></tr></thead>

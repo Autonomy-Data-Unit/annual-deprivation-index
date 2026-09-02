@@ -15,17 +15,17 @@
   <div class="doms">
     <div class="card" style="--h:{DOMAIN_HUES.employment}">
       <span class="ic"><DomainIcon domain="employment" size={24} /></span>
-      <h4>Employment</h4>
+      <h3>Employment</h3>
       <p>The <a href="https://www.nomisweb.co.uk/datasets/ucjsa" target="_blank" rel="noopener">Nomis</a> Claimant Count (dataset NM_162_1): Jobseeker's Allowance plus the relevant Universal Credit component, averaged from 12 monthly stock counts to an annual rate per area.</p>
     </div>
     <div class="card" style="--h:{DOMAIN_HUES.crime}">
       <span class="ic"><DomainIcon domain="crime" size={24} /></span>
-      <h4>Crime</h4>
+      <h3>Crime</h3>
       <p>Police-recorded street crime from <a href="https://data.police.uk/data/archive/" target="_blank" rel="noopener">data.police.uk</a>, aggregated to per-capita rates across 14 crime types.</p>
     </div>
     <div class="card" style="--h:{DOMAIN_HUES.health}">
       <span class="ic"><DomainIcon domain="health" size={24} /></span>
-      <h4>Health</h4>
+      <h3>Health</h3>
       <p>GP-recorded disease prevalence from the NHS <a href="https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data" target="_blank" rel="noopener">QOF</a>, mapped to neighbourhoods via GP-LSOA patient registrations across 21 conditions.</p>
     </div>
   </div>
@@ -73,7 +73,7 @@
   .doms { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--sp-3); margin: var(--sp-3) 0; }
   .doms .card { border-top: 3px solid var(--h); }
   .ic { color: var(--h); display: inline-block; margin-bottom: 6px; }
-  .doms h4 { margin: 0 0 6px; }
+  .doms h3 { margin: 0 0 6px; }
   .small { font-size: var(--fs-1); }
   @media (max-width: 760px) { .doms { grid-template-columns: 1fr; } }
 </style>

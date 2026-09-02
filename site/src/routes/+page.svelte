@@ -85,6 +85,7 @@
 
 <!-- National trend + map -->
 <section class="section container">
+  <h2 class="visually-hidden">National trends</h2>
   <div class="grid two">
     <div class="card">
       <p class="eyebrow">Employment · England</p>
@@ -116,7 +117,7 @@
 
 <!-- Domain cards -->
 <section class="section--tight container">
-  <p class="eyebrow">Three domains</p>
+  <h2 class="eyebrow">Three domains</h2>
   <div class="grid three">
     {#each [
       { d: 'employment', title: 'Employment', desc: 'Claimant Count from Nomis: JSA plus the relevant component of Universal Credit.', series: claimant.values, fmt: (v) => (v*100).toFixed(0)+'%' },
@@ -126,7 +127,7 @@
       <a class="dcard" href="{base}/explorer?domain={c.d}">
         <div class="dcard__head">
           <span class="dcard__icon" style="color:{DOMAIN_HUES[c.d]}"><DomainIcon domain={c.d} size={26} /></span>
-          <h4>{c.title}</h4>
+          <h3>{c.title}</h3>
         </div>
         <p class="muted small">{c.desc}</p>
         <div class="dcard__spark">
@@ -140,6 +141,7 @@
 
 <!-- Most deprived + IMD teaser -->
 <section class="section container">
+  <h2 class="visually-hidden">Local deprivation and the IMD</h2>
   <div class="grid two">
     <div class="card">
       <p class="eyebrow">Highest claimant rates · {dash.latest_year}</p>
@@ -185,7 +187,7 @@
   .dcard { display: block; background: var(--paper); border: var(--border-card); padding: var(--sp-4); text-decoration: none; color: inherit; transition: border-color var(--dur-fast); }
   .dcard:hover { border-color: var(--ink); }
   .dcard__head { display: flex; align-items: center; gap: 10px; margin-bottom: var(--sp-2); }
-  .dcard__head h4 { margin: 0; }
+  .dcard__head h3 { margin: 0; }
   .dcard__spark { margin: var(--sp-2) 0; }
   .dcard__link { font-size: var(--fs-1); font-weight: 600; color: var(--ink); }
   .card--imd { background: #fbfaf6; border-left: 3px solid var(--accent); }

@@ -69,17 +69,18 @@
 
   {#if dash}
     <!-- national trends -->
+    <h2 class="visually-hidden">National trends</h2>
     <div class="grid three">
       <div class="card">
-        <p class="eyebrow" style="color:{DOMAIN_HUES.employment}">Employment</p><h4 class="card__title">Claimant rate</h4>
+        <p class="eyebrow" style="color:{DOMAIN_HUES.employment}">Employment</p><h3 class="card__title">Claimant rate</h3>
         <LineChart x={mani.years} series={[{label:'',color:DOMAIN_HUES.employment,values:claimant.values}]} yFormat={(v)=>(v*100).toFixed(0)+'%'} yZero showLegend={false} markers={[{x:2020,label:'COVID',color:'#9c4a22'}]} height={200} />
       </div>
       <div class="card">
-        <p class="eyebrow" style="color:{DOMAIN_HUES.crime}">Crime</p><h4 class="card__title">All street crime /1k</h4>
+        <p class="eyebrow" style="color:{DOMAIN_HUES.crime}">Crime</p><h3 class="card__title">All street crime /1k</h3>
         <LineChart x={mani.years} series={[{label:'',color:DOMAIN_HUES.crime,values:crime.values.map(v=>v*1000)}]} yFormat={(v)=>v.toFixed(0)} yZero showLegend={false} height={200} />
       </div>
       <div class="card">
-        <p class="eyebrow" style="color:{DOMAIN_HUES.health}">Health</p><h4 class="card__title">Depression prevalence</h4>
+        <p class="eyebrow" style="color:{DOMAIN_HUES.health}">Health</p><h3 class="card__title">Depression prevalence</h3>
         <LineChart x={mani.years} series={[{label:'',color:DOMAIN_HUES.health,values:dep.values.map(v=>v==null?null:v*100)}]} yFormat={(v)=>v.toFixed(0)+'%'} yZero showLegend={false} height={200} />
       </div>
     </div>
@@ -89,11 +90,12 @@
       <div class="anim__head">
         <div>
           <p class="eyebrow">Animated map</p>
-          <h3 class="card__title">Claimant rate by local authority, {year}</h3>
+          <h2 class="card__title">Claimant rate by local authority, {year}</h2>
         </div>
         <div class="anim__ctrl">
           <button class="btn btn--accent" onclick={play}>{playing ? '❚❚ Pause' : '▶ Play'}</button>
-          <input type="range" min={mani.years[0]} max={mani.years.at(-1)} bind:value={year} />
+          <label class="visually-hidden" for="trend-year">Map year</label>
+          <input id="trend-year" type="range" min={mani.years[0]} max={mani.years.at(-1)} bind:value={year} />
           <span class="mono yr">{year}</span>
         </div>
       </div>
@@ -111,6 +113,7 @@
     </div>
 
     <!-- COVID spotlight -->
+    <h2 class="visually-hidden">The 2020 shock</h2>
     <div class="grid two covid">
       <div class="card card--accent">
         <p class="eyebrow">The 2020 shock</p>
@@ -120,7 +123,7 @@
       </div>
       <div class="card">
         <p class="eyebrow">Hardest-hit local authorities · 2019→2020</p>
-        <h4 class="card__title">Rise in claimant rate (pp)</h4>
+        <h3 class="card__title">Rise in claimant rate (pp)</h3>
         <BarChart items={covidBars} format={(v)=>'+'+v.toFixed(1)} color="#9c4a22" labelW={160} />
       </div>
     </div>
@@ -129,7 +132,7 @@
     {#if regionList?.length}
       <div class="card">
         <p class="eyebrow">Small multiples</p>
-        <h3 class="card__title">Claimant rate by region, {mani.years[0]} to {mani.years.at(-1)}</h3>
+        <h2 class="card__title">Claimant rate by region, {mani.years[0]} to {mani.years.at(-1)}</h2>
         <div class="sm-grid">
           {#each regionList as r}
             <div class="sm">
