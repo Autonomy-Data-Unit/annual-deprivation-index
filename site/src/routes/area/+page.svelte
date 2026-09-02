@@ -120,22 +120,25 @@
 <svelte:head><title>{rec ? rec.name : 'Area profile'} · ADI</title></svelte:head>
 
 <div class="container section">
-  {#if loading && !rec}
-    <p class="muted">Loading…</p>
-  {:else if error}
-    <p class="muted">{error}</p>
-    <p><a href="{base}/area?level=england&code=E92000001">← Back to England</a></p>
-  {:else if rec}
+  {#if rec}
     <nav class="crumbs">
       {#each crumbs as c, i}
         {#if c.current}<span class="crumbs__cur">{c.name}</span>
         {:else}<a href={hrefFor({ ...c, lad: c.level === 'lad' ? c.code : (rec.parents?.lad?.code) })}>{c.name}</a> <span class="crumbs__sep">›</span>{/if}
       {/each}
     </nav>
-
     <p class="eyebrow">{mani.level_labels[level]}{level !== 'england' ? ' profile' : ''}</p>
-    <h1>{rec.name}</h1>
+  {:else}
+    <p class="eyebrow">Area</p>
+  {/if}
+  <h1>{rec?.name || 'Area profile'}</h1>
 
+  {#if loading && !rec}
+    <p class="muted">Loading…</p>
+  {:else if error}
+    <p class="muted">{error}</p>
+    <p><a href="{base}/area?level=england&code=E92000001">← Back to England</a></p>
+  {:else if rec}
     <!-- key stats -->
     <div class="kpis">
       <div class="kpi" style="--h:{DOMAIN_HUES.employment}">
