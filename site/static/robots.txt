@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://adi.apps.autonomy.work/sitemap.xml

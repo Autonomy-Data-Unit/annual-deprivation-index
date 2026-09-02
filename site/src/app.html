@@ -7,7 +7,6 @@
     <link rel="apple-touch-icon" sizes="180x180" href="%sveltekit.assets%/apple-touch-icon-180.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#333333" />
-    <title>ADI: the Annual Deprivation Index for England</title>
     <meta name="description" content="An annual, absolute measure of deprivation across England covering employment, crime and health, at neighbourhood, local-authority, regional and national level, from 2014 to 2025. A product of the Autonomy Data Unit." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Annual Deprivation Index" />
@@ -32,10 +31,8 @@
   </head>
   <body data-sveltekit-preload-data="hover">
     <noscript>
-      <main style="max-width: 48rem; margin: 3rem auto; padding: 0 1.5rem; font: 1rem/1.6 system-ui, sans-serif; color: #1e1e2e">
-        <h1>Annual Deprivation Index</h1>
-        <p>This interactive site needs JavaScript. The ADI measures employment, crime and health deprivation across England every year from 2014 to 2025.</p>
-        <h2>Download the data without JavaScript</h2>
+      <div role="note" aria-label="JavaScript notice" style="max-width: 72rem; margin: 1rem auto; padding: 1rem 1.5rem; border: 2px solid #a87900; font: 1rem/1.6 system-ui, sans-serif; color: #1e1e2e">
+        <p><strong>JavaScript is unavailable.</strong> Interactive maps and controls need JavaScript. Direct data downloads remain available:</p>
         <ul>
           <li><a href="%sveltekit.assets%/downloads/adi-england.zip">England CSV bundle</a></li>
           <li><a href="%sveltekit.assets%/downloads/adi-region.zip">Region CSV bundle</a></li>
@@ -43,7 +40,7 @@
           <li><a href="%sveltekit.assets%/downloads/adi-lsoa.zip">Neighbourhood (LSOA) CSV bundle</a> — 88.3 MB ZIP</li>
         </ul>
         <p><a href="%sveltekit.assets%/annual-deprivation-index-paper.pdf">Read the methodology paper (PDF)</a> or <a href="https://github.com/Autonomy-Data-Unit/annual-deprivation-index">inspect the open-source pipeline</a>.</p>
-      </main>
+      </div>
     </noscript>
     <div style="display: contents">%sveltekit.body%</div>
   </body>

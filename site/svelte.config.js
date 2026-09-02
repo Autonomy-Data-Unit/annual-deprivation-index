@@ -1,6 +1,8 @@
 import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
+const knownRoutes = ['/', '/explorer', '/area', '/compare', '/trends', '/adi-vs-imd', '/download', '/about'];
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
   preprocess: vitePreprocess(),
@@ -8,19 +10,15 @@ const config = {
     adapter: adapter({
       pages: 'build',
       assets: 'build',
-      // SPA shell: AppGarden's static Caddy serves index.html for any non-file
-      // path, so we ship a single client-routed shell rather than per-route HTML.
-      fallback: 'index.html',
-      precompress: false,
-      strict: false
+      // TODO(cleanup): enable precompress — once AppGarden's static Caddy serves .br/.gz siblings.
+      precompress: false
     }),
     paths: {
       // served at the domain root on AppGarden
       base: ''
     },
     prerender: {
-      handleHttpError: 'warn',
-      handleMissingId: 'warn'
+      entries: knownRoutes
     }
   }
 };
