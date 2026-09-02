@@ -55,8 +55,11 @@
       <code>_rate</code> column is that row's count divided by that row's <code>pop</code>.</li>
     <li><strong>Health years are offset by one.</strong> QOF runs April–March and is labelled by the year
       it ends, so health <em>2021</em> covers April 2020–March 2021. Employment and crime are calendar years.</li>
-    <li><strong>Gaps are empty cells, never zeros.</strong> Greater Manchester has no street crime from 2020
-      onward; national and regional crime rates are computed from reporting areas only.</li>
+    <li><strong>Gaps are empty cells, never zeros.</strong> Crime coverage varies by year and police force:
+      incomplete, materially unlocated or malformed force returns are left blank. A blank means usable data were
+      not collected for that area-year, not a zero crime rate. To identify affected areas in a given year, filter
+      the LAD or LSOA crime CSV for blank crime <code>*_rate</code> fields. National and regional rates use only
+      areas with data.</li>
     <li><strong>Health figures for 2021 are not comparable with earlier years.</strong> QOF implementation
       changed during the pandemic, and NHS Digital warns that indicator data may be inaccurate. In the current
       England series, 10 of 20 comparable condition rates rose and 10 fell; obesity fell sharply while depression
