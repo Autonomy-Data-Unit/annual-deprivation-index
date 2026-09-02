@@ -16,6 +16,7 @@ Run:  uv run --with pandas --with numpy --with scipy python site/scripts/build_d
 from __future__ import annotations
 import json
 import math
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,7 @@ XWALK = ROOT / "store" / "inputs" / "crosswalk" / "lsoa11_to_lsoa21.csv"
 LU_LAD = ROOT / "store" / "inputs" / "geo_lookups" / "lsoa21_to_lad25.csv"
 LU_RGN = ROOT / "store" / "inputs" / "geo_lookups" / "lad25_to_rgn25.csv"
 WEB = ROOT / "site" / "static" / "data"
+DOWNLOADS = ROOT / "site" / "static" / "downloads"
 
 YEARS = list(range(2014, 2026))  # 2014..2025
 LEVELS = ["england", "region", "lad", "lsoa"]
@@ -266,6 +268,129 @@ for lv in LEVELS:
 for lv in LEVELS:
     print(f"  {lv}: {len(codes_by_level[lv])} areas")
 
+# ---------------------------------------------------------------- download bundle
+# Published CSVs, built HERE rather than from store/outputs/ on purpose: this is
+# downstream of the data-quality corrections above, so what people download is
+# exactly what the site shows. Publishing the raw outputs instead would ship the
+# Greater Manchester crime zeros and the dropped QOF indicators.
+print("Building download bundle...")
+
+DL_README = """Annual Deprivation Index (ADI) — {level_label}
+Autonomy Data Unit, Autonomy Institute
+https://adi.apps.autonomy.work
+
+CONTENTS
+  adi-{level}-employment.csv   Universal Credit claimant counts (Nomis NM_162_1)
+  adi-{level}-crime.csv        Police-recorded street crime (data.police.uk)
+  adi-{level}-health.csv       GP disease prevalence, QOF (NHS Digital), 21 conditions
+
+Each file is long by year: one row per area per year, with a `year` column.
+Areas are 2021 LSOA boundaries, rolled up to 2025 local authority and region
+boundaries.
+
+POPULATION BASE
+  `pop` is the ONS mid-year population estimate for ALL AGES (Nomis NM_2014_1,
+  2021 LSOA vintage) for that year. It is not an adult-only or working-age base.
+  Every `_rate` column is count / pop for the same row.
+  2025 uses the 2024 estimate, because the ONS series stops at 2024.
+
+YEARS
+  Employment and crime years are CALENDAR years.
+  Health years are QOF years, which run April to March and are labelled here by
+  the year they END. Health `2021` therefore covers April 2020 to March 2021.
+  Comparing the three domains for one labelled year compares slightly different
+  periods.
+
+KNOWN GAPS — these are empty cells, never zeros
+  Greater Manchester has no usable street crime from 2020 onward (Greater
+  Manchester Police stopped supplying street-level data to data.police.uk in
+  mid-2019). Those rows are blank, not zero, and national/regional crime rates
+  are computed from reporting areas only.
+
+  Health figures for the year labelled 2021 (QOF 2020-21) under-record across
+  all conditions because routine GP activity collapsed during the pandemic.
+  We recommend not using that year for trend analysis.
+
+  Smoking, hypothyroidism and CVD primary prevention are NOT included. NHS
+  Digital stopped publishing them as QOF prevalence groups (smoking and
+  hypothyroidism after 2013-14, CVD primary prevention after 2019-20), so no
+  later figures exist at any geography.
+
+LICENCE
+  Open Government Licence v3.0. Boundaries (c) ONS / Crown copyright.
+
+Generated {generated}. Methodology: https://adi.apps.autonomy.work/about
+"""
+
+_LEVEL_LABELS = {"england": "England", "region": "Regions",
+                 "lad": "Local authorities", "lsoa": "Neighbourhoods (LSOA)"}
+_DOMAIN_FILES = {"employment": "employment", "crime": "crime", "health": "health"}
+
+DOWNLOADS.mkdir(parents=True, exist_ok=True)
+_generated = pd.Timestamp.utcnow().strftime("%Y-%m-%d")
+_bundle_index = []
+
+for lv in LEVELS:
+    members = {}
+    for dom in _DOMAIN_FILES:
+        frames = []
+        for yr in sorted(data[lv][dom]):
+            df = data[lv][dom][yr].copy()
+            df.insert(0, "year", yr)
+            frames.append(df.reset_index())
+        if not frames:
+            continue
+        tidy = pd.concat(frames, ignore_index=True)
+        # code, name, year first; drop the dropped-QOF columns entirely rather
+        # than shipping empty ones.
+        if dom == "health":
+            drop_cols = [c for c in tidy.columns
+                         if any(c.startswith(f"{code}_") for code in DROP_HEALTH)]
+            tidy = tidy.drop(columns=drop_cols)
+        lead = [c for c in ("code", "name", "year") if c in tidy.columns]
+        tidy = tidy[lead + [c for c in tidy.columns if c not in lead]]
+        tidy = tidy.sort_values(["code", "year"], kind="stable")
+
+        # Format per column kind rather than with a global float_format, which
+        # renders population as 5.43612e+07. Population is a whole number of
+        # people; rates need precision; counts can be fractional (claimant
+        # counts are 12-month means, health counts are modelled).
+        if "pop" in tidy.columns:
+            tidy["pop"] = tidy["pop"].round().astype("Int64")
+        for c in tidy.columns:
+            if c in ("code", "name", "year", "pop"):
+                continue
+            tidy[c] = tidy[c].round(8 if c.endswith("_rate") else 3)
+        members[f"adi-{lv}-{dom}.csv"] = tidy.to_csv(index=False)
+
+    if not members:
+        continue
+    members["README.txt"] = DL_README.format(
+        level=lv, level_label=_LEVEL_LABELS[lv], generated=_generated)
+
+    zip_path = DOWNLOADS / f"adi-{lv}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for name, payload in members.items():
+            z.writestr(f"adi-{lv}/{name}", payload)
+    size = zip_path.stat().st_size
+    _bundle_index.append({
+        "level": lv,
+        "label": _LEVEL_LABELS[lv],
+        "file": f"downloads/{zip_path.name}",
+        "bytes": size,
+        "size": (f"{size/1_048_576:.1f} MB" if size >= 1_048_576 else f"{size/1024:.0f} KB"),
+    })
+    print(f"  {lv}: {zip_path.name} ({_bundle_index[-1]['size']})")
+
+# Download index: written here because it carries the per-level area counts,
+# which are only canonical once codes_by_level exists.
+for _entry in _bundle_index:
+    _entry["areas"] = len(codes_by_level[_entry["level"]])
+write_json(WEB / "downloads.json", {"years": [YEARS[0], YEARS[-1]],
+                                    "generated": _generated,
+                                    "bundles": _bundle_index}, indent=1)
+print(f"  download index: {len(_bundle_index)} bundles")
+
 # ---------------------------------------------------------------- hierarchy
 print("Building hierarchy...")
 lu_lad = pd.read_csv(LU_LAD)[["LSOA21CD", "LAD25CD"]]
@@ -403,8 +528,17 @@ manifest = {
                        "source": "Universal Credit claimant counts (Nomis)"},
         "crime": {"label": "Crime", "metrics": METRICS["crime"],
                   "source": "Police-recorded street crime (data.police.uk)"},
+        # `note` is surfaced in the Explorer beneath the source line. The QOF
+        # year offset is not cosmetic: comparing health against employment or
+        # crime for the same labelled year compares different periods, and the
+        # 2020-21 recording collapse makes the year labelled 2021 unusable for
+        # trends. Both are easy to walk into without being told.
         "health": {"label": "Health", "metrics": METRICS["health"],
-                   "source": "GP disease prevalence, QOF (NHS Digital)"},
+                   "source": "GP disease prevalence, QOF (NHS Digital)",
+                   "note": "QOF years run April\u2013March and are labelled by the year they end, "
+                           "so health \u201c2021\u201d covers April 2020\u2013March 2021 "
+                           "(employment and crime are calendar years). Pandemic disruption to GP "
+                           "recording makes that year under-record across all conditions."},
     },
     "counts": {lv: len(codes_by_level[lv]) for lv in LEVELS},
 }

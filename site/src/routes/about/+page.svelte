@@ -26,7 +26,7 @@
     <div class="card" style="--h:{DOMAIN_HUES.health}">
       <span class="ic"><DomainIcon domain="health" size={24} /></span>
       <h4>Health</h4>
-      <p>GP-recorded disease prevalence from the NHS <a href="https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data" target="_blank" rel="noopener">QOF</a>, mapped to neighbourhoods via GP-LSOA patient registrations across 24 conditions.</p>
+      <p>GP-recorded disease prevalence from the NHS <a href="https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data" target="_blank" rel="noopener">QOF</a>, mapped to neighbourhoods via GP-LSOA patient registrations across 21 conditions.</p>
     </div>
   </div>
 
@@ -41,9 +41,11 @@
     <li>Nomis suppresses claimant counts below 5; these are treated as zero, a small downward bias in low-claimant areas.</li>
     <li>Police-recorded crime completeness varies by force and period; incidents with missing LSOA codes are dropped, not imputed.</li>
     <li>QOF reflects <em>GP-diagnosed</em> conditions and so understates genuinely under-diagnosed conditions (e.g. dementia, depression).</li>
-    <li>For 2021+ the 2011-vintage population series is unavailable, so the 2020 estimate is used as a fallback before crosswalking.</li>
+    <li>For 2021+ the 2011-vintage population series is unavailable, so the 2020 estimate is used as a fallback <em>within</em> the domain processing step. Published rates are not affected: they are re-denominated against the real LSOA 2021 mid-year estimate for each year. The exception is 2025, which uses the 2024 estimate because the ONS series stops at 2024.</li>
     <li>Six "complex-change" LSOAs are excluded from the 2011→2021 conversion.</li>
     <li><strong>Greater Manchester crime gap:</strong> Greater Manchester Police stopped supplying street-level data to data.police.uk in mid-2019, so its boroughs have no usable crime data for 2020 onward. These are shown as <em>no data</em> (not zero), and regional/national crime rates are computed from reporting areas only.</li>
+    <li><strong>Health years are offset by one.</strong> QOF runs April to March, and the ADI labels a QOF year by the year it <em>ends</em> — so health “2021” is QOF 2020-21, covering April 2020 to March 2021. Employment and crime years are calendar years. Comparing the three domains for the same labelled year therefore compares slightly different periods.</li>
+    <li><strong>Pandemic disruption to QOF recording (2020-21).</strong> Routine GP activity collapsed during the first Covid year, so disease registers under-record across the board in the year labelled 2021. Obesity is the clearest case: England prevalence runs 8.4% (2020) → 5.5% (2021) → 7.8% (2022). This is a recording artefact, not a fall in disease. We recommend not using 2021 health figures for trend analysis.</li>
     <li><strong>Depression 2023-24 &amp; osteoporosis 2014-15:</strong> the NHS QOF publication reported these single-year figures on a different basis (incidence rather than cumulative prevalence). Each is treated as missing and linearly interpolated from the neighbouring years, consistent with the pipeline's gap-filling.</li>
   </ul>
   <p class="muted small">All data-quality corrections are surfaced by an automated validator that runs over the raw outputs; see the pipeline repository.</p>
@@ -55,8 +57,9 @@
   </p>
 
   <h2>Data &amp; reproducibility</h2>
-  <p class="measure">The full pipeline (fetch, process and aggregate) is open source and reproducible end to end. All sources are public; no API keys are required.</p>
+  <p class="measure">The complete dataset is available as CSV, at every geographic level. The full pipeline (fetch, process and aggregate) is open source and reproducible end to end. All sources are public; no API keys are required.</p>
   <p>
+    <a class="btn btn--accent" href="{base}/download">Download the data →</a>
     <a class="btn btn--ghost" href="https://github.com/Autonomy-Data-Unit/annual-deprivation-index" target="_blank" rel="noopener">Pipeline on GitHub ↗</a>
     <a class="btn btn--ghost" href="{base}/adi-vs-imd">How it complements the IMD →</a>
   </p>

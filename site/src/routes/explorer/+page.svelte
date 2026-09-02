@@ -112,6 +112,9 @@
       </div>
 
       <p class="src">{mani.domains[domain].source}</p>
+      {#if mani.domains[domain].note}
+        <p class="src note">{mani.domains[domain].note}</p>
+      {/if}
     {/if}
   </aside>
 
@@ -171,6 +174,7 @@
   .full { width: 100%; }
   .yticks { display: flex; justify-content: space-between; font-size: 10px; color: var(--grey-1); font-family: var(--font-mono); }
   .src { font-size: var(--fs-0); color: var(--grey-1); border-top: 1px solid var(--grey-3); padding-top: var(--sp-2); }
+  .src.note { border-top: 0; padding-top: 0; margin-top: var(--sp-1); line-height: 1.45; }
   .detail__name { font-size: var(--fs-4); margin: 0 0 2px; }
   .small { font-size: var(--fs-1); } .tiny { font-size: var(--fs-0); }
   .detail__big { margin: var(--sp-3) 0 var(--sp-1); display: flex; flex-direction: column; }
