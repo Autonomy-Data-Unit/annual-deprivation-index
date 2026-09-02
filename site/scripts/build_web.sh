@@ -23,7 +23,8 @@ else
 fi
 
 # 2. compact web data
-if [[ $FORCE -eq 1 || ! -f site/static/data/manifest.json || ! -f site/static/data/imd.json || ! -f site/static/data/area/lad.json ]]; then
+if [[ $FORCE -eq 1 || ! -f site/static/data/manifest.json || ! -f site/static/data/imd.json \
+   || ! -f site/static/data/area/lad.json || ! -f site/static/downloads/adi-lsoa.zip ]]; then
   echo "[web] building compact data…"
   uv run --with pandas --with numpy --with scipy python -u site/scripts/build_data.py
 else

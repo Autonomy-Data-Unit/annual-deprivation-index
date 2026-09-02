@@ -37,7 +37,7 @@
         <li>
           <a class="dl__link" href="{base}/{b.file}" download>
             <span class="dl__label">{b.label}</span>
-            <span class="dl__meta">{b.areas.toLocaleString()} areas · ZIP, {b.size}</span>
+            <span class="dl__meta">{b.areas.toLocaleString()} {b.areas === 1 ? 'area' : 'areas'} · ZIP, {b.size}</span>
           </a>
         </li>
       {/each}
