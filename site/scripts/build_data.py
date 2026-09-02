@@ -14,8 +14,13 @@ Outputs under site/static/data/:
 Run:  uv run --with pandas --with numpy --with scipy python site/scripts/build_data.py
 """
 from __future__ import annotations
+
+import atexit
 import json
 import math
+import os
+import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -29,8 +34,27 @@ IMD_DIR = ROOT / "store" / "inputs" / "imd"
 XWALK = ROOT / "store" / "inputs" / "crosswalk" / "lsoa11_to_lsoa21.csv"
 LU_LAD = ROOT / "store" / "inputs" / "geo_lookups" / "lsoa21_to_lad25.csv"
 LU_RGN = ROOT / "store" / "inputs" / "geo_lookups" / "lad25_to_rgn25.csv"
-WEB = ROOT / "site" / "static" / "data"
-DOWNLOADS = ROOT / "site" / "static" / "downloads"
+STATIC = ROOT / "site" / "static"
+LIVE_WEB = STATIC / "data"
+LIVE_DOWNLOADS = STATIC / "downloads"
+
+# Build outside the publicly served static tree. A data-loading or generation failure
+# therefore leaves the last complete build in place. The staging directory stays under
+# site/ so promotion can use same-filesystem atomic file replacements.
+_STAGING_PARENT = STATIC.parent
+_STAGING = Path(tempfile.mkdtemp(prefix=".build-data-", dir=_STAGING_PARENT))
+WEB = _STAGING / "data"
+DOWNLOADS = _STAGING / "downloads"
+
+
+def _remove_staging() -> None:
+    """Remove only the uniquely-created staging directory, never a live output path."""
+    if _STAGING.parent != _STAGING_PARENT or not _STAGING.name.startswith(".build-data-"):
+        raise RuntimeError(f"Refusing to remove unsafe staging path: {_STAGING}")
+    shutil.rmtree(_STAGING, ignore_errors=True)
+
+
+atexit.register(_remove_staging)
 
 YEARS = list(range(2014, 2026))  # 2014..2025
 LEVELS = ["england", "region", "lad", "lsoa"]
@@ -73,6 +97,22 @@ def rnd(x, n=6):
     return round(float(x), n)
 
 
+def rnd_count(x, n=1):
+    """Round a display count compactly without turning a measurement into zero.
+
+    Counts normally retain the existing fixed decimal precision. A non-zero value below
+    half that precision keeps six significant digits instead, avoiding a contradictory
+    zero count beside a positive rate while adding bytes only for exceptional tiny values.
+    """
+    rounded = rnd(x, n)
+    if rounded is None:
+        return None
+    value = float(x)
+    if value != 0 and rounded == 0:
+        return float(f"{value:.6g}")
+    return rounded
+
+
 def read_level(level: str, domain: str, year: int) -> pd.DataFrame | None:
     """Read one CSV; normalise first two cols to code,name. Returns None if missing."""
     d = OUT_DEF / level / domain
@@ -105,6 +145,124 @@ def write_json(path: Path, obj, indent=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(obj, f, separators=(",", ":"), allow_nan=False, indent=indent)
+
+
+_ROOT_DATA_OUTPUTS = {
+    "dashboard.json", "downloads.json", "hierarchy.json", "imd.json", "manifest.json",
+}
+
+
+def _owns_data_output(relative: Path) -> bool:
+    """Whether build_data.py owns an existing path and may remove it as obsolete."""
+    parts = relative.parts
+    if len(parts) == 1:
+        return parts[0] in _ROOT_DATA_OUTPUTS
+    if len(parts) == 2 and parts[0] == "codes":
+        return relative.suffix == ".json"
+    # The complete map/<level>/<domain>/<metric>.json namespace belongs to this
+    # builder. Do not restrict this to today's levels or domains: retired ones
+    # must be recognised as obsolete on the next build too.
+    if len(parts) == 4 and parts[0] == "map":
+        return relative.suffix == ".json"
+    if len(parts) == 2 and parts[0] == "area" and parts[1] in {
+        "england.json", "region.json", "lad.json",
+    }:
+        return True
+    if len(parts) == 3 and parts[:2] == ("area", "lsoa"):
+        return relative.suffix == ".json"
+    return False
+
+
+def _owns_download_output(relative: Path) -> bool:
+    """Download ZIPs use a dedicated builder-owned filename namespace."""
+    return len(relative.parts) == 1 and relative.name.startswith("adi-") and relative.suffix == ".zip"
+
+
+def _files_below(root: Path) -> dict[Path, Path]:
+    if not root.exists():
+        return {}
+    return {path.relative_to(root): path for path in root.rglob("*") if path.is_file()}
+
+
+def _validate_staged_outputs() -> None:
+    """Reject an incomplete or internally inconsistent staging tree before publication."""
+    staged_data = _files_below(WEB)
+    unexpected = sorted(str(path) for path in staged_data if not _owns_data_output(path))
+    if unexpected:
+        raise RuntimeError(f"Builder created paths outside its owned data namespaces: {unexpected}")
+
+    required = _ROOT_DATA_OUTPUTS | {f"codes/{level}.json" for level in LEVELS}
+    required |= {f"area/{level}.json" for level in ("england", "region", "lad")}
+    missing = sorted(path for path in required if Path(path) not in staged_data)
+    if missing:
+        raise RuntimeError(f"Staged data build is incomplete; missing: {missing}")
+
+    with (WEB / "manifest.json").open() as f:
+        staged_manifest = json.load(f)
+    expected_maps = {
+        Path("map") / level / domain / f"{metric['key']}.json"
+        for level in staged_manifest["levels"]
+        for domain, domain_spec in staged_manifest["domains"].items()
+        for metric in domain_spec["metrics"]
+    }
+    actual_maps = {path for path in staged_data if path.parts[0] == "map"}
+    if actual_maps != expected_maps:
+        raise RuntimeError(
+            "Staged map files do not match manifest metrics; "
+            f"missing={sorted(map(str, expected_maps - actual_maps))}, "
+            f"extra={sorted(map(str, actual_maps - expected_maps))}"
+        )
+
+    staged_downloads = _files_below(DOWNLOADS)
+    expected_downloads = {Path(f"adi-{level}.zip") for level in LEVELS}
+    if set(staged_downloads) != expected_downloads:
+        raise RuntimeError(
+            "Staged download set is incomplete; "
+            f"missing={sorted(map(str, expected_downloads - set(staged_downloads)))}, "
+            f"extra={sorted(map(str, set(staged_downloads) - expected_downloads))}"
+        )
+    for level in LEVELS:
+        zip_path = DOWNLOADS / f"adi-{level}.zip"
+        member = f"adi-{level}/adi-{level}-health.csv"
+        with zipfile.ZipFile(zip_path) as archive, archive.open(member) as health_csv:
+            header = health_csv.readline().decode("utf-8")
+        leaked = sorted(code for code in DROP_HEALTH if f"{code}_" in header)
+        if leaked:
+            raise RuntimeError(f"Dropped health metrics leaked into {member}: {leaked}")
+
+
+def _promote_files(staged_root: Path, live_root: Path, owns) -> list[Path]:
+    """Atomically replace current files, then remove obsolete builder-owned files.
+
+    Stale removal happens only after every staged file has been promoted. Unknown files are
+    neither replaced nor removed. If promotion itself fails, old files remain for every
+    target not yet replaced, so the live directory is never emptied first.
+    """
+    if live_root not in (LIVE_WEB, LIVE_DOWNLOADS):
+        raise RuntimeError(f"Refusing to publish outside the configured live roots: {live_root}")
+    staged = _files_below(staged_root)
+    existing = {path: source for path, source in _files_below(live_root).items() if owns(path)}
+    invalid = sorted(str(path) for path in staged if not owns(path))
+    if invalid:
+        raise RuntimeError(f"Refusing to promote unowned output paths: {invalid}")
+
+    for relative, source in sorted(staged.items()):
+        target = live_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(source, target)
+
+    obsolete = sorted(set(existing) - set(staged))
+    for relative in obsolete:
+        (live_root / relative).unlink()
+
+    return obsolete
+
+
+def publish_staged_outputs() -> tuple[list[Path], list[Path]]:
+    _validate_staged_outputs()
+    removed_data = _promote_files(WEB, LIVE_WEB, _owns_data_output)
+    removed_downloads = _promote_files(DOWNLOADS, LIVE_DOWNLOADS, _owns_download_output)
+    return removed_data, removed_downloads
 
 
 # ---------------------------------------------------------------- load everything into nested dict
@@ -622,7 +780,7 @@ def build_record(lv, code):
     for yr in YEARS:
         r = DD[lv]["employment"].get(yr, {}).get(code)
         if r is not None:
-            emp["count"].append(rnd(r["claimant_count"], 1))
+            emp["count"].append(rnd_count(r["claimant_count"], 1))
             emp["pop"].append(int(r["pop"]) if not pd.isna(r["pop"]) else None)
             covered = r["claimant_count_pop"]
             emp["count_pop"].append(int(covered) if not pd.isna(covered) else None)
@@ -646,13 +804,13 @@ def build_record(lv, code):
                 count = r[name]
                 covered = r[f"{name}{COUNT_POP_SUFFIX}"]
                 rate = r[f"{name}_rate"]
-                cri["types"][slug]["count"].append(rnd(count, 1))
+                cri["types"][slug]["count"].append(rnd_count(count, 1))
                 cri["types"][slug]["pop"].append(
                     int(covered) if not pd.isna(covered) else None
                 )
                 cri["types"][slug]["rate"].append(rnd(rate, 8))
             if not pd.isna(total):
-                cri["total_count"].append(rnd(total, 1))
+                cri["total_count"].append(rnd_count(total, 1))
                 cri["total_pop"].append(int(total_pop))
                 cri["total_rate"].append(rnd(total / total_pop, 8))
             else:
@@ -683,7 +841,7 @@ def build_record(lv, code):
                 count_col = f"{code_}_afflicted"
                 covered_col = f"{count_col}{COUNT_POP_SUFFIX}"
                 hea["diseases"][code_]["rate"].append(rnd(r[rate_col], 7))
-                hea["diseases"][code_]["afflicted"].append(rnd(r[count_col], 1))
+                hea["diseases"][code_]["afflicted"].append(rnd_count(r[count_col], 1))
                 covered = r[covered_col]
                 hea["diseases"][code_]["afflicted_pop"].append(
                     int(covered) if not pd.isna(covered) else None
@@ -935,6 +1093,14 @@ imd_out = {
     "lsoa_major_contradictions": n_major,
 }
 write_json(WEB / "imd.json", imd_out)
+
+removed_data, removed_downloads = publish_staged_outputs()
+print(
+    f"Published staged outputs; removed {len(removed_data)} obsolete data files "
+    f"and {len(removed_downloads)} obsolete downloads"
+)
+for obsolete in removed_data + removed_downloads:
+    print(f"  removed stale output: {obsolete}")
 
 print("\nDONE. Summary:")
 print(f"  correlations 2019: {corr19}")
