@@ -1,5 +1,4 @@
-// Pure SPA: no prerendering. AppGarden serves index.html for all routes and the
-// client router resolves them. ssr stays on for the shell; prerender off.
-export const prerender = false;
-export const ssr = false;
-export const trailingSlash = 'never';
+// Emit each known route as route/index.html so AppGarden serves full HTML via
+// {path}/index.html. Its /index.html fallback remains for unknown paths.
+export const prerender = true;
+export const trailingSlash = 'always';
