@@ -125,10 +125,65 @@ for lv in LEVELS:
             data[lv]["health"][yr] = he.set_index("code")
 
 # ---------------------------------------------------------------- data-quality corrections
-# Documented, transparent corrections for KNOWN source-data defects (flagged by
-# scripts/validate_outputs.py on the raw outputs). Each is logged. Not silent fallbacks:
-# the validator still runs on the uncorrected outputs and the About page documents these.
+# Documented, transparent corrections for known source-data defects. Store outputs stay
+# frozen as the audit trail; corrections happen at the publishing boundary and are logged.
 print("Applying data-quality corrections...")
+
+COUNT_POP_SUFFIX = "_pop"
+
+
+# Geography used to propagate every LSOA correction upward. Correcting each stored level
+# independently breaks the defining invariant that England == sum(regions) == sum(LADs) ==
+# sum(LSOAs), so corrected higher levels are always rebuilt from corrected LSOAs.
+lu_lad0 = pd.read_csv(LU_LAD)[["LSOA21CD", "LAD25CD"]].drop_duplicates()
+lu_rgn0 = pd.read_csv(LU_RGN)[["LAD25CD", "RGN25CD"]].drop_duplicates()
+_lsoa_geo = lu_lad0.merge(lu_rgn0, on="LAD25CD", how="inner").set_index("LSOA21CD")
+
+
+def _required_metric_columns(df: pd.DataFrame, count_col: str) -> tuple[str, str]:
+    """Return this count's population/rate columns, failing on schema drift."""
+    covered_col = f"{count_col}{COUNT_POP_SUFFIX}"
+    rate_col = f"{count_col}_rate"
+    missing = [c for c in (count_col, covered_col, rate_col) if c not in df.columns]
+    if missing:
+        raise ValueError(f"Metric {count_col!r} is missing required columns {missing}")
+    return covered_col, rate_col
+
+
+def _reaggregate_health_metric(disease: str, year: int) -> None:
+    """Rebuild one corrected health metric at every higher level from LSOAs."""
+    count_col = f"{disease}_afflicted"
+    source = data["lsoa"]["health"][year]
+    covered_col, rate_col = _required_metric_columns(source, count_col)
+    source_codes = source.index.to_series()
+
+    targets = {
+        "lad": source_codes.map(_lsoa_geo["LAD25CD"]),
+        "region": source_codes.map(_lsoa_geo["RGN25CD"]),
+        "england": pd.Series("E92000001", index=source.index),
+    }
+    for level, target_codes in targets.items():
+        if target_codes.isna().any():
+            missing = source.index[target_codes.isna()].tolist()
+            raise ValueError(
+                f"Cannot propagate {disease} {year}: LSOAs have no {level} mapping: {missing[:5]}"
+            )
+        grouped = (
+            source[[count_col, covered_col]]
+            .assign(_target=target_codes.to_numpy())
+            .groupby("_target")[[count_col, covered_col]]
+            .sum(min_count=1)
+        )
+        target = data[level]["health"][year]
+        if set(grouped.index) != set(target.index):
+            raise ValueError(
+                f"Cannot propagate {disease} {year} to {level}: corrected and stored code sets differ"
+            )
+        aligned = grouped.reindex(target.index)
+        target[count_col] = aligned[count_col]
+        target[covered_col] = aligned[covered_col]
+        target[rate_col] = target[count_col] / target[covered_col].replace(0, np.nan)
+
 
 # (1) Drop QOF indicators with no usable prevalence series (sparse/empty: present in
 #     only one year or all-zero). Leaves the canonical 21 conditions.
@@ -137,119 +192,85 @@ _before = len(HEALTH)
 HEALTH = [(c, l) for (c, l) in HEALTH if c not in DROP_HEALTH]
 print(f"  health: dropped {sorted(DROP_HEALTH)} -> {len(HEALTH)} conditions (was {_before})")
 
-# (2) Single-year source anomalies: a disease whose register switched basis for one
-#     publication (DEP 2023-24 reported new-diagnosis incidence ~1.5% vs cumulative
-#     prevalence ~13-14%; OST 2014-15 dip-and-reverse). Null + linearly interpolate
-#     from the flanking years (matches the pipeline's own ≤2-gap interpolation policy).
+
+# (2) Reject implausible LSOA health spikes; never clamp them to the boundary,
+#     because a clamped prevalence is a fabricated observation. The finest published
+#     geography is the right place for this guard: reject there once, then rebuild every
+#     aggregate from the surviving LSOAs. A 5% all-age prevalence can be real in an
+#     unusually old/institutional neighbourhood, so the absolute bound alone is not enough;
+#     the value must also exceed the mean of both adjacent years by at least 3x. This
+#     distinguishes the two known one-year extra-digit register errors from persistent high
+#     values. The current inputs reject 8 EP LSOAs in 2016 and 7 HF LSOAs in 2021.
+HEALTH_SPIKE_BOUNDS = {
+    "EP": {"max_rate": 0.05, "max_neighbour_factor": 3.0},
+    "HF": {"max_rate": 0.05, "max_neighbour_factor": 3.0},
+}
+for disease, bound in HEALTH_SPIKE_BOUNDS.items():
+    count_col = f"{disease}_afflicted"
+    affected_years = []
+    rejected = 0
+    for year in YEARS[1:-1]:
+        cur = data["lsoa"]["health"][year]
+        left = data["lsoa"]["health"][year - 1]
+        right = data["lsoa"]["health"][year + 1]
+        covered_col, rate_col = _required_metric_columns(cur, count_col)
+        neighbour_mean = (
+            left[rate_col].reindex(cur.index) + right[rate_col].reindex(cur.index)
+        ) / 2.0
+        bad = (
+            (cur[rate_col] > bound["max_rate"])
+            & (cur[rate_col] > bound["max_neighbour_factor"] * neighbour_mean)
+        )
+        n_bad = int(bad.sum())
+        if n_bad:
+            cur.loc[bad, [count_col, covered_col, rate_col]] = np.nan
+            affected_years.append(year)
+            rejected += n_bad
+            print(f"  health: rejected {n_bad} implausible {disease} LSOA values in {year}")
+    for year in affected_years:
+        _reaggregate_health_metric(disease, year)
+    print(f"  health: {disease} sanity guard rejected {rejected} values in total")
+
+
+# (3) Single-year source anomalies: a disease whose register switched basis for one
+#     publication (DEP 2023-24 reported new-diagnosis incidence rather than cumulative
+#     prevalence; OST 2014-15 dip-and-reverse). Discard the affected LSOA observation
+#     first, then interpolate from flanking years. The modelled count covers the current
+#     year's whole LSOA population. Rebuild all higher levels from those corrected LSOAs
+#     rather than independently interpolating each geography.
 HEALTH_FIX = [("DEP", 2024), ("OST", 2015)]
-for dis, yr in HEALTH_FIX:
-    rc, ac = f"{dis}_afflicted_rate", f"{dis}_afflicted"
-    n = 0
-    for lv in LEVELS:
-        cur = data[lv]["health"].get(yr)
-        left = data[lv]["health"].get(yr - 1)
-        right = data[lv]["health"].get(yr + 1)
-        if right is None:  # e.g. 2024's right anchor is health_2024_25 (mapped year 2025)
-            r = read_level(lv, "health", yr + 1)
-            right = r.set_index("code") if r is not None else None
-        if cur is None or left is None or right is None or rc not in cur.columns:
-            continue
-        for code in cur.index:
-            if code not in left.index or code not in right.index:
-                continue
-            lvv, rvv = left.at[code, rc], right.at[code, rc]
-            if pd.isna(lvv) or pd.isna(rvv):
-                continue
-            newr = (float(lvv) + float(rvv)) / 2.0
-            cur.at[code, rc] = newr
-            if ac in cur.columns and "pop" in cur.columns and not pd.isna(cur.at[code, "pop"]):
-                cur.at[code, ac] = newr * float(cur.at[code, "pop"])
-            n += 1
-    print(f"  health: {dis} {yr} null+interpolated across {n} areas")
+for disease, year in HEALTH_FIX:
+    count_col = f"{disease}_afflicted"
+    cur = data["lsoa"]["health"][year]
+    left = data["lsoa"]["health"][year - 1]
+    right = data["lsoa"]["health"][year + 1]
+    covered_col, rate_col = _required_metric_columns(cur, count_col)
 
-# (3) Crime: police forces with reporting gaps (notably Greater Manchester from mid-2019)
-#     emit near-zero counts that are NOT real. Detect per-LAD: a year whose total crime
-#     rate is < 20% of that LAD's own normal (median of non-trivial years) is a data gap.
-#     Null those LAD-years (and their LSOAs); recompute Region/England crime rates from
-#     REPORTING areas only so national/regional rates aren't deflated by the gap.
-_crime_cnt_cols = lambda df: [t[0] for t in CRIME_TYPES if t[0] in df.columns]
-def _lad_total_rate(df, code):
-    if code not in df.index:
-        return None
-    r = df.loc[code]
-    cols = _crime_cnt_cols(df)
-    tot = float(sum(float(r[c]) for c in cols if not pd.isna(r[c])))
-    pop = float(r["pop"]) if not pd.isna(r["pop"]) else 0.0
-    return (tot / pop) if pop > 0 else None
+    left_rate = left[rate_col].reindex(cur.index)
+    right_rate = right[rate_col].reindex(cur.index)
+    interpolated_rate = (left_rate + right_rate) / 2.0
+    valid = interpolated_rate.notna() & cur["pop"].notna()
 
-_lad_crime = data["lad"]["crime"]
-_lad_codes = set().union(*[set(df.index) for df in _lad_crime.values()]) if _lad_crime else set()
-nonreporting: dict[int, set] = {}
-for code in _lad_codes:
-    series = {yr: _lad_total_rate(df, code) for yr, df in _lad_crime.items()}
-    rates = [v for v in series.values() if v is not None]
-    normal_pool = [v for v in rates if v > 0.01]
-    if not normal_pool:
-        continue
-    normal = float(np.median(normal_pool))
-    for yr, v in series.items():
-        if v is not None and v < 0.2 * normal:
-            nonreporting.setdefault(yr, set()).add(code)
+    # The whole source-year metric is known to be on the wrong basis, so values without
+    # two valid anchors stay missing rather than leaking the bad source observation through.
+    cur[[count_col, covered_col, rate_col]] = np.nan
+    cur.loc[valid, rate_col] = interpolated_rate.loc[valid]
+    cur.loc[valid, covered_col] = cur.loc[valid, "pop"]
+    cur.loc[valid, count_col] = (
+        cur.loc[valid, rate_col] * cur.loc[valid, covered_col]
+    )
+    _reaggregate_health_metric(disease, year)
+    print(
+        f"  health: {disease} {year} interpolated {int(valid.sum())} LSOAs once; "
+        "rebuilt LAD/Region/England from them"
+    )
 
-# null nonreporting LADs + their LSOAs
-lu_lad0 = pd.read_csv(LU_LAD)[["LSOA21CD", "LAD25CD"]]
-_lsoa_to_lad = dict(zip(lu_lad0["LSOA21CD"], lu_lad0["LAD25CD"]))
-lu_rgn0 = pd.read_csv(LU_RGN)[["LAD25CD", "RGN25CD"]].drop_duplicates("LAD25CD")
-_lad_to_rgn = dict(zip(lu_rgn0["LAD25CD"], lu_rgn0["RGN25CD"]))
-_n_gap = sum(len(s) for s in nonreporting.values())
-for yr, codes in nonreporting.items():
-    df = data["lad"]["crime"].get(yr)
-    if df is not None:
-        cols = [c for c in df.columns if c not in ("name", "pop")]
-        for code in codes:
-            if code in df.index:
-                df.loc[code, cols] = np.nan
-    ldf = data["lsoa"]["crime"].get(yr)
-    if ldf is not None:
-        cols = [c for c in ldf.columns if c not in ("name", "pop")]
-        bad_lsoas = [ls for ls, ld in _lsoa_to_lad.items() if ld in codes and ls in ldf.index]
-        for ls in bad_lsoas:
-            ldf.loc[ls, cols] = np.nan
 
-# recompute Region + England crime from reporting LADs only (representative rates)
-for yr, codes in nonreporting.items():
-    ldf = data["lad"]["crime"].get(yr)
-    if ldf is None:
-        continue
-    reporting = [c for c in ldf.index if c not in codes]
-    cnt_cols = _crime_cnt_cols(ldf)
-    # England
-    edf = data["england"]["crime"].get(yr)
-    if edf is not None:
-        ecode = edf.index[0]
-        sub = ldf.loc[reporting]
-        pop = float(sub["pop"].sum())
-        for c in cnt_cols:
-            tot = float(sub[c].sum())
-            edf.at[ecode, c] = tot
-            edf.at[ecode, f"{c}_rate"] = (tot / pop) if pop > 0 else np.nan
-        edf.at[ecode, "pop"] = pop
-    # Regions
-    rdf = data["region"]["crime"].get(yr)
-    if rdf is not None:
-        for rcode in rdf.index:
-            rep = [c for c in reporting if _lad_to_rgn.get(c) == rcode]
-            if not rep:
-                continue
-            sub = ldf.loc[rep]
-            pop = float(sub["pop"].sum())
-            for c in cnt_cols:
-                tot = float(sub[c].sum())
-                rdf.at[rcode, c] = tot
-                rdf.at[rcode, f"{c}_rate"] = (tot / pop) if pop > 0 else np.nan
-            rdf.at[rcode, "pop"] = pop
-print(f"  crime: nulled {_n_gap} non-reporting LAD-years (force gaps) across {len(nonreporting)} years; "
-      f"Region/England crime recomputed from reporting areas")
+# Crime coverage is not corrected here. The pipeline now rejects incomplete force-years
+# before annual aggregation and every crime count carries its own `<count>_pop` coverage
+# denominator. The former median-rate heuristic and Region/England recomputation were both
+# redundant and dangerous: on a wholly missing year, pandas' default sum could turn all-NaN
+# counts into zero. The site now publishes the upstream NaNs and denominators unchanged.
 
 # canonical code/name per level (sorted by code), from the latest employment year
 codes_by_level: dict[str, list[str]] = {}
@@ -269,10 +290,8 @@ for lv in LEVELS:
     print(f"  {lv}: {len(codes_by_level[lv])} areas")
 
 # ---------------------------------------------------------------- download bundle
-# Published CSVs, built HERE rather than from store/outputs/ on purpose: this is
-# downstream of the data-quality corrections above, so what people download is
-# exactly what the site shows. Publishing the raw outputs instead would ship the
-# Greater Manchester crime zeros and the dropped QOF indicators.
+# Published CSVs are built here rather than copied from store/outputs so the explicit
+# health corrections above are reflected identically in downloads and site JSON.
 print("Building download bundle...")
 
 DL_README = """Annual Deprivation Index (ADI) — {level_label}
@@ -288,10 +307,13 @@ Each file is long by year: one row per area per year, with a `year` column.
 Areas are 2021 LSOA boundaries, rolled up to 2025 local authority and region
 boundaries.
 
-POPULATION BASE
+POPULATION AND COVERAGE
   `pop` is the ONS mid-year population estimate for ALL AGES (Nomis NM_2014_1,
   2021 LSOA vintage) for that year. It is not an adult-only or working-age base.
-  Every `_rate` column is count / pop for the same row.
+  Every count column has a matching `<count>_pop`: the population actually covered
+  by that metric. Every `_rate` is count / `<count>_pop`, not count / `pop`.
+  At LSOA level `<count>_pop` equals `pop` when measured and is blank when not; at
+  higher levels it can be smaller than `pop` where some child areas were not measured.
   2025 uses the 2024 estimate, because the ONS series stops at 2024.
 
 YEARS
@@ -302,10 +324,11 @@ YEARS
   periods.
 
 KNOWN GAPS — these are empty cells, never zeros
-  Greater Manchester has no usable street crime from 2020 onward (Greater
-  Manchester Police stopped supplying street-level data to data.police.uk in
-  mid-2019). Those rows are blank, not zero, and national/regional crime rates
-  are computed from reporting areas only.
+  The pipeline rejects a force-year unless all 12 monthly police files are present
+  and non-empty. British Transport Police gaps make crime unavailable everywhere in
+  2016 and 2025. Greater Manchester is unavailable from 2019 onward; Devon &
+  Cornwall is additionally unavailable in 2022. Higher-level counts and rates use
+  each metric's explicit `<count>_pop` reporting denominator.
 
   Health figures for the year labelled 2021 (QOF 2020-21) under-record across
   all conditions because routine GP activity collapsed during the pandemic.
@@ -352,13 +375,14 @@ for lv in LEVELS:
         tidy = tidy.sort_values(["code", "year"], kind="stable")
 
         # Format per column kind rather than with a global float_format, which
-        # renders population as 5.43612e+07. Population is a whole number of
-        # people; rates need precision; counts can be fractional (claimant
-        # counts are 12-month means, health counts are modelled).
-        if "pop" in tidy.columns:
-            tidy["pop"] = tidy["pop"].round().astype("Int64")
+        # renders population as 5.43612e+07. `pop` and every metric-specific
+        # `<count>_pop` are whole people; rates need precision; counts can be
+        # fractional (claimant counts are 12-month means, health counts are modelled).
+        pop_cols = [c for c in tidy.columns if c == "pop" or c.endswith(COUNT_POP_SUFFIX)]
+        for c in pop_cols:
+            tidy[c] = tidy[c].round().astype("Int64")
         for c in tidy.columns:
-            if c in ("code", "name", "year", "pop"):
+            if c in ("code", "name", "year") or c in pop_cols:
                 continue
             tidy[c] = tidy[c].round(8 if c.endswith("_rate") else 3)
         members[f"adi-{lv}-{dom}.csv"] = tidy.to_csv(index=False)
@@ -436,6 +460,43 @@ for lv in LEVELS:
                {"codes": codes, "names": [names_by_level[lv].get(c, c) for c in codes]})
 
 # ---------------------------------------------------------------- per-(level) metric value series helpers
+def _crime_total(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Return total crime count and its shared coverage population.
+
+    Crime types currently share one force-coverage mask. Refuse to invent a total if
+    that invariant changes: counts measured over different populations cannot be summed
+    into a meaningful rate without an explicit total-crime denominator policy.
+    """
+    count_cols = [name for name, _ in CRIME_TYPES]
+    required = count_cols + [f"{name}{COUNT_POP_SUFFIX}" for name in count_cols]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Crime total is missing required columns: {missing}")
+
+    covered = df[[f"{name}{COUNT_POP_SUFFIX}" for name in count_cols]]
+    first = covered.iloc[:, 0]
+    same = covered.eq(first, axis=0) | (covered.isna() & first.isna().to_numpy()[:, None])
+    if not bool(same.all().all()):
+        raise ValueError(
+            "Crime-type coverage populations differ; cannot derive an all-crime rate"
+        )
+    return df[count_cols].sum(axis=1, min_count=1), first
+
+
+def _crime_total_from_row(row: dict) -> tuple[float, float]:
+    """Row-dict equivalent of `_crime_total`, used by compact area profiles."""
+    counts = [row[name] for name, _ in CRIME_TYPES]
+    covered = [row[f"{name}{COUNT_POP_SUFFIX}"] for name, _ in CRIME_TYPES]
+    first = covered[0]
+    if any(
+        not ((pd.isna(value) and pd.isna(first)) or value == first)
+        for value in covered[1:]
+    ):
+        raise ValueError("Crime-type coverage populations differ in an area record")
+    total = sum(float(value) for value in counts if not pd.isna(value))
+    return (total if any(not pd.isna(value) for value in counts) else np.nan), first
+
+
 def metric_series_for_level(lv, domain, metric_key):
     """Return dict year -> pd.Series(code->value) for a metric at a level."""
     out = {}
@@ -447,9 +508,8 @@ def metric_series_for_level(lv, domain, metric_key):
             s = df["claimant_count_rate"]
         elif domain == "crime":
             if metric_key == "total":
-                count_cols = [t[0] for t in CRIME_TYPES if t[0] in df.columns]
-                tot = df[count_cols].sum(axis=1, min_count=1)  # all-NaN row -> NaN (no data)
-                s = tot / df["pop"].replace(0, np.nan)
+                total, covered_pop = _crime_total(df)
+                s = total / covered_pop.replace(0, np.nan)
             else:
                 name = next(t[0] for t in CRIME_TYPES if t[1] == metric_key)
                 col = f"{name}_rate"
@@ -555,60 +615,85 @@ for lv in LEVELS:
 
 def build_record(lv, code):
     rec = {"code": code, "name": names_by_level[lv].get(code, code), "level": lv}
-    # employment
-    emp = {"count": [], "pop": [], "rate": []}
+    # Employment keeps the full area population and the claimant count's coverage
+    # population separately. They currently agree, but using the explicit denominator makes
+    # schema drift visible instead of silently changing a rate's meaning.
+    emp = {"count": [], "pop": [], "count_pop": [], "rate": []}
     for yr in YEARS:
         r = DD[lv]["employment"].get(yr, {}).get(code)
         if r is not None:
             emp["count"].append(rnd(r["claimant_count"], 1))
             emp["pop"].append(int(r["pop"]) if not pd.isna(r["pop"]) else None)
+            covered = r["claimant_count_pop"]
+            emp["count_pop"].append(int(covered) if not pd.isna(covered) else None)
             emp["rate"].append(rnd(r["claimant_count_rate"], 7))
         else:
-            emp["count"].append(None); emp["pop"].append(None); emp["rate"].append(None)
+            emp["count"].append(None); emp["pop"].append(None)
+            emp["count_pop"].append(None); emp["rate"].append(None)
     rec["employment"] = emp
-    # crime
-    cri = {"total_count": [], "total_rate": [], "pop": [], "types": {slug: {"count": [], "rate": []} for _, slug in CRIME_TYPES}}
+    # Crime likewise carries a denominator for the total and each type.
+    cri = {
+        "total_count": [], "total_pop": [], "total_rate": [], "pop": [],
+        "types": {slug: {"count": [], "pop": [], "rate": []} for _, slug in CRIME_TYPES},
+    }
     for yr in YEARS:
         r = DD[lv]["crime"].get(yr, {}).get(code)
         if r is not None:
-            pop = r["pop"]
-            cri["pop"].append(int(pop) if not pd.isna(pop) else None)
-            tot = 0.0
-            any_cnt = False
+            area_pop = r["pop"]
+            cri["pop"].append(int(area_pop) if not pd.isna(area_pop) else None)
+            total, total_pop = _crime_total_from_row(r)
             for name, slug in CRIME_TYPES:
-                cnt = r.get(name, np.nan)
-                rate = r.get(f"{name}_rate", np.nan)
-                cri["types"][slug]["count"].append(rnd(cnt, 1))
+                count = r[name]
+                covered = r[f"{name}{COUNT_POP_SUFFIX}"]
+                rate = r[f"{name}_rate"]
+                cri["types"][slug]["count"].append(rnd(count, 1))
+                cri["types"][slug]["pop"].append(
+                    int(covered) if not pd.isna(covered) else None
+                )
                 cri["types"][slug]["rate"].append(rnd(rate, 8))
-                if not pd.isna(cnt):
-                    tot += cnt
-                    any_cnt = True
-            # all-NaN crime row = data gap (e.g. force not reporting) -> no data, not 0
-            if any_cnt:
-                cri["total_count"].append(rnd(tot, 1))
-                cri["total_rate"].append(rnd(tot / pop, 8) if pop and not pd.isna(pop) and pop > 0 else None)
+            if not pd.isna(total):
+                cri["total_count"].append(rnd(total, 1))
+                cri["total_pop"].append(int(total_pop))
+                cri["total_rate"].append(rnd(total / total_pop, 8))
             else:
-                cri["total_count"].append(None)
+                cri["total_count"].append(None); cri["total_pop"].append(None)
                 cri["total_rate"].append(None)
         else:
-            cri["pop"].append(None); cri["total_count"].append(None); cri["total_rate"].append(None)
+            cri["pop"].append(None); cri["total_count"].append(None)
+            cri["total_pop"].append(None); cri["total_rate"].append(None)
             for _, slug in CRIME_TYPES:
-                cri["types"][slug]["count"].append(None); cri["types"][slug]["rate"].append(None)
+                cri["types"][slug]["count"].append(None)
+                cri["types"][slug]["pop"].append(None)
+                cri["types"][slug]["rate"].append(None)
     rec["crime"] = cri
-    # health
-    hea = {"pop": [], "diseases": {code_: {"rate": [], "afflicted": []} for code_, _ in HEALTH}}
+    # Health
+    hea = {
+        "pop": [],
+        "diseases": {
+            code_: {"rate": [], "afflicted": [], "afflicted_pop": []}
+            for code_, _ in HEALTH
+        },
+    }
     for yr in YEARS:
         r = DD[lv]["health"].get(yr, {}).get(code)
         if r is not None:
-            hea["pop"].append(int(r["pop"]) if "pop" in r and not pd.isna(r["pop"]) else None)
+            hea["pop"].append(int(r["pop"]) if not pd.isna(r["pop"]) else None)
             for code_, _ in HEALTH:
-                rc = f"{code_}_afflicted_rate"; ac = f"{code_}_afflicted"
-                hea["diseases"][code_]["rate"].append(rnd(r[rc], 7) if rc in r else None)
-                hea["diseases"][code_]["afflicted"].append(rnd(r[ac], 1) if ac in r else None)
+                rate_col = f"{code_}_afflicted_rate"
+                count_col = f"{code_}_afflicted"
+                covered_col = f"{count_col}{COUNT_POP_SUFFIX}"
+                hea["diseases"][code_]["rate"].append(rnd(r[rate_col], 7))
+                hea["diseases"][code_]["afflicted"].append(rnd(r[count_col], 1))
+                covered = r[covered_col]
+                hea["diseases"][code_]["afflicted_pop"].append(
+                    int(covered) if not pd.isna(covered) else None
+                )
         else:
             hea["pop"].append(None)
             for code_, _ in HEALTH:
-                hea["diseases"][code_]["rate"].append(None); hea["diseases"][code_]["afflicted"].append(None)
+                hea["diseases"][code_]["rate"].append(None)
+                hea["diseases"][code_]["afflicted"].append(None)
+                hea["diseases"][code_]["afflicted_pop"].append(None)
     rec["health"] = hea
     # parents
     if lv == "lsoa":
@@ -671,10 +756,16 @@ dashboard = {
     "latest_year": LATEST,
     "england": {"claimant_rate": emp_eng, "total_crime_rate": crime_eng, "depression_rate": dep_eng},
     "headline": {
-        "claimant_rate_latest": rnd(float(lad24["claimant_count"].sum() / lad24["pop"].sum()), 6),
+        "claimant_rate_latest": rnd(
+            float(lad24["claimant_count"].sum() / lad24["claimant_count_pop"].sum()), 6
+        ),
         "covid": {
-            "y2019": rnd(float(lad19["claimant_count"].sum() / lad19["pop"].sum()), 6),
-            "y2020": rnd(float(lad20["claimant_count"].sum() / lad20["pop"].sum()), 6),
+            "y2019": rnd(
+                float(lad19["claimant_count"].sum() / lad19["claimant_count_pop"].sum()), 6
+            ),
+            "y2020": rnd(
+                float(lad20["claimant_count"].sum() / lad20["claimant_count_pop"].sum()), 6
+            ),
         },
         "n_lsoa": len(codes_by_level["lsoa"]),
         "n_lad": len(codes_by_level["lad"]),
@@ -714,11 +805,8 @@ def adi_lsoa_year(year):
     cc = data["lsoa"]["employment"][year].reset_index()[["code", "claimant_count_rate"]].rename(
         columns={"code": "LSOA21CD"})
     cr = data["lsoa"]["crime"][year].reset_index()
-    count_cols = [t[0] for t in CRIME_TYPES if t[0] in cr.columns]
-    # min_count=1 so all-NaN rows (e.g. nulled Greater Manchester reporting gaps) stay NaN
-    # rather than collapsing to 0 and tying at the worst rank. Matches metric_series_for_level.
-    crime_total = cr[count_cols].sum(axis=1, min_count=1)
-    cr["adi_crime_rate"] = crime_total / cr["pop"].replace(0, np.nan)
+    crime_total, crime_pop = _crime_total(cr)
+    cr["adi_crime_rate"] = crime_total / crime_pop.replace(0, np.nan)
     cr = cr[["code", "adi_crime_rate"]].rename(columns={"code": "LSOA21CD"})
     m = cc.merge(cr, on="LSOA21CD", how="inner").rename(columns={"claimant_count_rate": "adi_claimant_rate"})
     he = data["lsoa"]["health"].get(year)
@@ -729,8 +817,13 @@ def adi_lsoa_year(year):
     return m
 
 def spearman(x, y):
+    """Return a finite correlation, or None when a metric has no usable data."""
     v = pd.DataFrame({"x": x, "y": y}).dropna()
-    return float(stats.spearmanr(v["x"], v["y"]).statistic)
+    if len(v) < 2:
+        return None
+    statistic = float(stats.spearmanr(v["x"], v["y"]).statistic)
+    return statistic if math.isfinite(statistic) else None
+
 
 def correlations_for(adi, imd, via_xwalk):
     if via_xwalk:
@@ -742,13 +835,13 @@ def correlations_for(adi, imd, via_xwalk):
     m["adi_crime_rank"] = m["adi_crime_rate"].rank(ascending=False)
     res = {
         "n": int(len(m)),
-        "employment": round(spearman(m["adi_claimant_rank"], m["imd_emp_rank"]), 3),
-        "crime": round(spearman(m["adi_crime_rank"], m["imd_crime_rank"]), 3),
-        "overall_claimant": round(spearman(m["adi_claimant_rank"], m["imd_rank"]), 3),
+        "employment": rnd(spearman(m["adi_claimant_rank"], m["imd_emp_rank"]), 3),
+        "crime": rnd(spearman(m["adi_crime_rank"], m["imd_crime_rank"]), 3),
+        "overall_claimant": rnd(spearman(m["adi_claimant_rank"], m["imd_rank"]), 3),
     }
     if "adi_dep_rate" in m.columns and m["adi_dep_rate"].notna().any():
         m["adi_dep_rank"] = m["adi_dep_rate"].rank(ascending=False)
-        res["health"] = round(spearman(m["adi_dep_rank"], m["imd_health_rank"]), 3)
+        res["health"] = rnd(spearman(m["adi_dep_rank"], m["imd_health_rank"]), 3)
     return res, m
 
 imd25, imd19, imd15 = load_imd("2025"), load_imd("2019"), load_imd("2015")
