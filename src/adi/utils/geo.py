@@ -87,8 +87,15 @@ def apply_crosswalk(
     for col in cols_to_weight:
         merged[col] = merged[col] * merged["weight"]
 
-    # Reaggregate by LSOA21CD
-    result = merged.groupby("LSOA21CD")[cols_to_weight].sum().reset_index()
+    # Reaggregate by LSOA21CD.
+    #
+    # min_count=1 is load-bearing: pandas' default sum() returns 0 for an
+    # all-NaN group, which would turn "this quantity was never collected" into
+    # the assertion "we measured it and it was nil". QOF stopped publishing
+    # several disease groups (SMOK after 2013-14, THY after 2013-14, CVDPP
+    # after 2019-20), and those arrive here as all-NaN columns. They must stay
+    # NaN all the way to the published outputs.
+    result = merged.groupby("LSOA21CD")[cols_to_weight].sum(min_count=1).reset_index()
 
     return result
 
@@ -124,9 +131,15 @@ def aggregate_to_geography(
         on=lsoa_col, how="inner",
     )
 
-    # Sum counts and population by geography
+    # Sum counts and population by geography.
+    # min_count=1 so an all-NaN group stays NaN rather than becoming 0 -- see
+    # the note in apply_crosswalk.
     agg_cols = count_cols + [pop_col]
-    result = merged.groupby([geo_code_col, geo_name_col])[agg_cols].sum().reset_index()
+    result = (
+        merged.groupby([geo_code_col, geo_name_col])[agg_cols]
+        .sum(min_count=1)
+        .reset_index()
+    )
 
     # Recompute rates
     for col in count_cols:
@@ -135,3 +148,27 @@ def aggregate_to_geography(
             result[rate_col] = result[col] / result[pop_col].replace(0, np.nan)
 
     return result
+
+
+def load_lsoa21_population(pop_dir: Path, year: int) -> pd.DataFrame:
+    """Load the ONS mid-year LSOA 2021 population estimate for `year`.
+
+    This is the denominator for the published outputs. It is deliberately the
+    real per-year estimate for the target vintage, NOT the LSOA 2011 population
+    carried through the crosswalk: the 2011-vintage series (Nomis NM_2010_1)
+    ends at 2020, so using it freezes the denominator from 2021 onward and
+    silently understates population growth in every later year.
+
+    Raises FileNotFoundError if the year is missing. There is deliberately no
+    fallback to a neighbouring year -- a silently substituted denominator is
+    exactly the failure this function exists to remove.
+    """
+    path = pop_dir / f"population_{year}.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No LSOA 2021 population file for {year} at {path}. "
+            f"Run the fetch_populations node for that year."
+        )
+    pop = pd.read_csv(path)
+    pop = pop.rename(columns={"GEOGRAPHY_CODE": "LSOA21CD", "OBS_VALUE": "pop"})
+    return pop[["LSOA21CD", "pop"]]

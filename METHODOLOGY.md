@@ -26,9 +26,18 @@ The binding constraint on the earliest year is the GP-LSOA patient registration 
 ONS mid-year population estimates are used as the denominator for all rate calculations. Two series are downloaded:
 
 - **LSOA 2011** populations from Nomis dataset NM_2010_1 (2011--2020). Used by all three domain processors.
-- **LSOA 2021** populations from Nomis dataset NM_2014_1 (2011--2024). Used for crosswalk weighting and as the denominator in final outputs.
+- **LSOA 2021** populations from Nomis dataset NM_2014_1 (2011--2024). Used for crosswalk weighting and, per-year, as the denominator in the final outputs.
 
-The LSOA 2011 population series ends in 2020. For years beyond 2020, the pipeline falls back to the 2020 estimate. This is a known approximation; LSOA-level population shifts between 2020 and later years are not reflected in the domain processing step, though they are captured in the LSOA 2021 populations used after the crosswalk.
+The LSOA 2011 population series ends in 2020. For years beyond 2020, the **domain processing step** falls back to the 2020 estimate, because the claimant, crime and QOF source data are all coded to 2011 boundaries and no later 2011-vintage population exists.
+
+That fallback does **not** reach the published outputs. The `aggregate` node discards the crosswalked 2011-vintage population and re-denominates every output against the real LSOA 2021 mid-year estimate for that year (`load_lsoa21_population`), so published rates for 2021 onward are computed against the actual population of that year rather than a frozen mid-2020 figure.
+
+The two domain families are re-denominated differently, because they are not the same kind of quantity:
+
+- **Employment and crime** counts are genuine counts — a claimant is a claimant regardless of the population. The counts are untouched and only the rate denominator moves.
+- **Health** counts are derived: `afflicted = prevalence_rate x population`, where the QOF-weighted prevalence *rate* is the measured quantity and the count is a presentational scaling of it. Re-denominating without rescaling would silently corrupt the prevalence estimate, so the rate is held fixed and the count re-derived against the new population.
+
+**Caveat on 2025.** Nomis NM_2014_1 publishes to 2024. The 2025 population file is a copy of the 2024 estimate, so 2025 rates are computed against the 2024 population. This is the one remaining frozen denominator, and it is one year rather than five.
 
 ## Employment Domain
 

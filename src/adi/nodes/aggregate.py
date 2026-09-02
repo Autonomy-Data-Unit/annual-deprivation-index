@@ -10,7 +10,12 @@ async def main(ctx, print, domains_ready: dict) -> bool:
     import numpy as np
     import pandas as pd
     
-    from adi.utils.geo import build_crosswalk, apply_crosswalk, aggregate_to_geography
+    from adi.utils.geo import (
+        build_crosswalk,
+        apply_crosswalk,
+        aggregate_to_geography,
+        load_lsoa21_population,
+    )
     run_name = ctx.vars["run_name"]
     lsoa_vintage = ctx.vars["lsoa_vintage"]
     year_start = ctx.vars["year_start"]
@@ -37,7 +42,69 @@ async def main(ctx, print, domains_ready: dict) -> bool:
     print(f"  crosswalk: {n_unchanged} unchanged, {n_split} split rows, {n_merged} merge rows")
     lsoa_to_lad = pd.read_csv(const.geo_lookups_path / "lsoa21_to_lad25.csv")
     lad_to_rgn = pd.read_csv(const.geo_lookups_path / "lad25_to_rgn25.csv")
-    def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_pattern):
+    def _pop_year_from_stem(stem):
+        """Calendar year whose population estimate is the denominator for `stem`.
+    
+        Claimant and crime files are calendar years ("crime_2021" -> 2021). Health
+        files are QOF years, named by the April-to-March window they cover
+        ("health_2020_21" -> 2021); the ADI labels a QOF year by the year it ENDS,
+        so that is the population year too.
+        """
+        m = re.search(r"_(\d{4})_(\d{2})$", stem)
+        if m:
+            start_year, end_suffix = int(m.group(1)), int(m.group(2))
+            return start_year + 1 if end_suffix < 50 else start_year
+        m = re.search(r"_(\d{4})$", stem)
+        if not m:
+            raise ValueError(f"Cannot determine a population year from filename stem {stem!r}")
+        return int(m.group(1))
+    
+    
+    def _reset_denominator(df, count_cols, pop_col, pop_year, derived_counts):
+        """Swap the crosswalked denominator for the real LSOA 2021 estimate.
+    
+        `apply_crosswalk` carries the LSOA 2011 population through the crosswalk,
+        but that series (Nomis NM_2010_1) ends at 2020, so every year from 2021 on
+        would otherwise be published against a frozen mid-2020 denominator. The
+        real per-year LSOA 2021 estimate (NM_2014_1) is the correct denominator and
+        is what METHODOLOGY.md has always claimed is used.
+    
+        Two kinds of domain, handled differently:
+    
+        * Claimant and crime counts are GENUINE counts -- a claimant is a claimant
+          whatever the population is. The counts are untouched; only the rate
+          denominator moves.
+        * The health count is DERIVED: afflicted = prevalence_rate * population,
+          where the QOF-weighted prevalence RATE is the measured quantity and the
+          count is a presentational scaling of it. Swapping the denominator without
+          rescaling would silently corrupt the prevalence estimate, so the rate is
+          held fixed and the count re-derived against the new population.
+        """
+        df = df.reset_index(drop=True).copy()
+        if derived_counts:
+            denom = df[pop_col].replace(0, np.nan)
+            for col in count_cols:
+                df[f"_rate_{col}"] = df[col] / denom
+    
+        pop21 = load_lsoa21_population(pop_dir_2021, pop_year)
+        df = df.drop(columns=[pop_col]).merge(pop21, on="LSOA21CD", how="left")
+    
+        n_missing = int(df[pop_col].isna().sum())
+        if n_missing:
+            raise ValueError(
+                f"{n_missing} LSOA 2021 areas have no {pop_year} population estimate. "
+                f"Refusing to publish rates against a partial denominator."
+            )
+    
+        if derived_counts:
+            for col in count_cols:
+                df[col] = df[f"_rate_{col}"] * df[pop_col]
+            df = df.drop(columns=[f"_rate_{col}" for col in count_cols])
+        return df
+    
+    
+    def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_pattern,
+                        derived_counts=False):
         """Process a single domain: crosswalk + aggregate to all geography levels."""
         files = sorted(domain_dir.glob(year_pattern))
         if not files:
@@ -53,6 +120,13 @@ async def main(ctx, print, domains_ready: dict) -> bool:
     
             # Apply crosswalk (LSOA 2011 -> LSOA 2021)
             lsoa21_df = apply_crosswalk(df, crosswalk, count_cols, pop_col)
+    
+            # Publish against the real LSOA 2021 mid-year estimate for this year,
+            # not the crosswalked (and, from 2021, frozen) 2011-vintage population.
+            pop_year = _pop_year_from_stem(stem)
+            lsoa21_df = _reset_denominator(
+                lsoa21_df, count_cols, pop_col, pop_year, derived_counts,
+            )
     
             # --- LSOA level ---
             lsoa_dir = output_dir / "lsoa" / domain_name
@@ -86,7 +160,12 @@ async def main(ctx, print, domains_ready: dict) -> bool:
                 lad_to_rgn[["LAD25CD", "RGN25CD", "RGN25NM"]].drop_duplicates(),
                 on="LAD25CD", how="inner",
             )
-            rgn_df = lsoa_with_rgn.groupby(["RGN25CD", "RGN25NM"])[count_cols + [pop_col]].sum().reset_index()
+            # min_count=1: an all-NaN column is "not collected", not zero.
+            rgn_df = (
+                lsoa_with_rgn.groupby(["RGN25CD", "RGN25NM"])[count_cols + [pop_col]]
+                .sum(min_count=1)
+                .reset_index()
+            )
             for col in count_cols:
                 rgn_df[f"{col}_rate"] = rgn_df[col] / rgn_df[pop_col].replace(0, np.nan)
             rgn_df.to_csv(rgn_dir / f"{stem}.csv", index=False)
@@ -94,14 +173,15 @@ async def main(ctx, print, domains_ready: dict) -> bool:
             # --- England level ---
             eng_dir = output_dir / "england" / domain_name
             eng_dir.mkdir(parents=True, exist_ok=True)
-            eng_row = lsoa21_df[count_cols + [pop_col]].sum().to_frame().T
+            eng_row = lsoa21_df[count_cols + [pop_col]].sum(min_count=1).to_frame().T
             eng_row.insert(0, "area_code", "E92000001")
             eng_row.insert(1, "area_name", "England")
             for col in count_cols:
                 eng_row[f"{col}_rate"] = eng_row[col] / eng_row[pop_col].replace(0, np.nan)
             eng_row.to_csv(eng_dir / f"{stem}.csv", index=False)
     
-            print(f"  {domain_name}/{stem}: LSOA={len(lsoa_out)}, LAD={len(lad_df)}, Region={len(rgn_df)}")
+            print(f"  {domain_name}/{stem}: LSOA={len(lsoa_out)}, LAD={len(lad_df)}, "
+                  f"Region={len(rgn_df)}, pop_year={pop_year}")
     _process_domain(
         "claimant_counts",
         pipeline_dir / "claimant_counts",
@@ -122,6 +202,7 @@ async def main(ctx, print, domains_ready: dict) -> bool:
         lambda df: [c for c in df.columns if c.endswith("_afflicted")],
         "pop",
         "health_*.csv",
+        derived_counts=True,
     )
     print(f"aggregate: done, output at {const.rel(output_dir)}")
     return True

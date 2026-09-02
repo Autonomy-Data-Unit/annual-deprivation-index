@@ -23,7 +23,7 @@ The binding constraint is the GP-LSOA patient registration data (starts April 20
 
 **Earliest year with all three domains: 2014.** Default `year_start` is 2014.
 
-For years 2021+, LSOA 2011 population data is unavailable from Nomis; the pipeline falls back to the 2020 estimate.
+For years 2021+, LSOA 2011 population data is unavailable from Nomis; the *domain processing* step falls back to the 2020 estimate. The published outputs are unaffected: `aggregate` re-denominates against the real per-year LSOA 2021 estimate (`load_lsoa21_population`).
 
 ## Data Sources
 
@@ -110,7 +110,8 @@ Output: `LSOA11CD, {21 disease}_prevalence_rate, {21 disease}_afflicted, list_po
 ### Aggregate Node
 
 1. **Build crosswalk**: LSOA 2011 → LSOA 2021 using exact-fit lookup. Unchanged (U): weight 1.0. Splits (S): weight by LSOA 2021 population proportion. Merges (M): weight 1.0 (values summed). Complex (X): excluded.
-2. **Apply crosswalk**: Disaggregate absolute counts using weights, reaggregate to LSOA 2021, recompute rates.
+2. **Apply crosswalk**: Disaggregate absolute counts using weights, reaggregate to LSOA 2021, recompute rates. All sums use `min_count=1` so a column that was never collected (e.g. QOF `SMOK` after 2013-14) stays NaN instead of collapsing to 0.
+2b. **Re-denominate**: Replace the crosswalked 2011-vintage population with the real LSOA 2021 mid-year estimate for that year. Employment/crime counts are kept and rates recomputed; health counts are re-derived from the fixed prevalence rate.
 3. **Geographic aggregation**: Sum counts and populations to LAD (296), Region (9), England (1). Recompute rates at each level.
 4. **Output**: `store/outputs/{run_name}/{lsoa,lad,region,england}/{domain}/{file}.csv`
 
