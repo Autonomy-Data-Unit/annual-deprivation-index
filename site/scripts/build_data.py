@@ -20,7 +20,9 @@ import json
 import math
 import os
 import shutil
+import stat
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -223,12 +225,150 @@ def _validate_staged_outputs() -> None:
         )
     for level in LEVELS:
         zip_path = DOWNLOADS / f"adi-{level}.zip"
-        member = f"adi-{level}/adi-{level}-health.csv"
-        with zipfile.ZipFile(zip_path) as archive, archive.open(member) as health_csv:
-            header = health_csv.readline().decode("utf-8")
-        leaked = sorted(code for code in DROP_HEALTH if f"{code}_" in header)
-        if leaked:
-            raise RuntimeError(f"Dropped health metrics leaked into {member}: {leaked}")
+        prefix = f"adi-{level}/"
+        expected_members = {
+            f"{prefix}README.txt",
+            f"{prefix}adi-{level}-data-dictionary.csv",
+            f"{prefix}adi-{level}-geography.csv",
+            *(f"{prefix}adi-{level}-{domain}.csv" for domain in _DOMAIN_FILES),
+        }
+        with zipfile.ZipFile(zip_path) as archive:
+            actual_members = set(archive.namelist())
+            if actual_members != expected_members:
+                raise RuntimeError(
+                    f"Unexpected members in {zip_path.name}; "
+                    f"missing={sorted(expected_members - actual_members)}, "
+                    f"extra={sorted(actual_members - expected_members)}"
+                )
+
+            for member_info in archive.infolist():
+                unix_mode = member_info.external_attr >> 16
+                if not stat.S_ISREG(unix_mode) or stat.S_IMODE(unix_mode) != 0o644:
+                    raise RuntimeError(
+                        f"{zip_path.name}:{member_info.filename} has Unix mode "
+                        f"{stat.filemode(unix_mode)}, expected -rw-r--r--"
+                    )
+
+            expected_areas = len(codes_by_level[level])
+            readme = archive.read(f"{prefix}README.txt").decode("utf-8")
+            expected_rows = expected_areas * len(YEARS)
+            if (
+                f"{expected_rows:,} data" not in readme
+                or f"{expected_areas:,} unique areas x {len(YEARS)} years" not in readme
+            ):
+                raise RuntimeError(f"README row claims are stale in {zip_path.name}")
+
+            geography_member = f"{prefix}adi-{level}-geography.csv"
+            with archive.open(geography_member) as geography_csv:
+                geography = pd.read_csv(geography_csv)
+            if (
+                len(geography) != expected_areas
+                or set(geography["code"]) != set(codes_by_level[level])
+            ):
+                raise RuntimeError(f"Geography dictionary is incomplete in {zip_path.name}")
+
+            dictionary_member = f"{prefix}adi-{level}-data-dictionary.csv"
+            with archive.open(dictionary_member) as dictionary_csv:
+                dictionary = pd.read_csv(dictionary_csv)
+            expected_metrics = 1 + len(CRIME_TYPES) + len(HEALTH)
+            if (
+                len(dictionary) != expected_metrics
+                or dictionary["metric"].nunique() != expected_metrics
+            ):
+                raise RuntimeError(f"Metric dictionary is incomplete in {zip_path.name}")
+
+            for domain in _DOMAIN_FILES:
+                member = f"{prefix}adi-{level}-{domain}.csv"
+                rows = 0
+                rows_by_year: dict[int, int] = {}
+                codes_by_year = {year: set() for year in YEARS}
+                with archive.open(member) as source:
+                    for chunk in pd.read_csv(source, chunksize=50_000):
+                        rows += len(chunk)
+                        if rows == len(chunk):
+                            rate_columns = [c for c in chunk if c.endswith("_rate")]
+                            count_columns = [c.removesuffix("_rate") for c in rate_columns]
+                            domain_dictionary = dictionary[dictionary["domain"] == domain]
+                            if (
+                                set(domain_dictionary["count_column"]) != set(count_columns)
+                                or set(domain_dictionary["coverage_population_column"])
+                                != {f"{column}{COUNT_POP_SUFFIX}" for column in count_columns}
+                                or set(domain_dictionary["rate_column"]) != set(rate_columns)
+                            ):
+                                raise RuntimeError(
+                                    f"Metric dictionary columns do not match {member}"
+                                )
+                        for year, year_rows in chunk.groupby("year"):
+                            year = int(year)
+                            if year not in codes_by_year:
+                                raise RuntimeError(f"Unexpected year {year} in {member}")
+                            chunk_codes = set(year_rows["code"])
+                            duplicates = codes_by_year[year] & chunk_codes
+                            duplicates |= set(
+                                year_rows.loc[year_rows["code"].duplicated(), "code"]
+                            )
+                            if duplicates:
+                                raise RuntimeError(
+                                    f"Duplicate area-year keys in {member}: "
+                                    f"{sorted(duplicates)[:5]}"
+                                )
+                            codes_by_year[year].update(chunk_codes)
+                            rows_by_year[year] = rows_by_year.get(year, 0) + len(year_rows)
+
+                        rate_columns = [c for c in chunk if c.endswith("_rate")]
+                        for rate_col in rate_columns:
+                            count_col = rate_col.removesuffix("_rate")
+                            covered_col = f"{count_col}{COUNT_POP_SUFFIX}"
+                            triple = chunk[[count_col, covered_col, rate_col]]
+                            present = triple.notna()
+                            partial = present.any(axis=1) & ~present.all(axis=1)
+                            if partial.any():
+                                sample = chunk.loc[partial, ["code", "year", *triple.columns]].head()
+                                raise RuntimeError(
+                                    f"Partially blank metric triple in {member}:\n{sample}"
+                                )
+                            valid = present.all(axis=1)
+                            reproduced = (
+                                chunk.loc[valid, count_col]
+                                / chunk.loc[valid, covered_col]
+                            ).round(8)
+                            mismatched = ~reproduced.eq(chunk.loc[valid, rate_col])
+                            if mismatched.any():
+                                bad_index = mismatched[mismatched].index[:5]
+                                sample = chunk.loc[
+                                    bad_index, ["code", "year", count_col, covered_col, rate_col]
+                                ]
+                                raise RuntimeError(
+                                    f"Published rates do not reproduce in {member}:\n{sample}"
+                                )
+
+                expected_by_year = {year: expected_areas for year in YEARS}
+                expected_codes = set(codes_by_level[level])
+                wrong_code_sets = {
+                    year: {
+                        "missing": sorted(expected_codes - codes)[:5],
+                        "extra": sorted(codes - expected_codes)[:5],
+                    }
+                    for year, codes in codes_by_year.items()
+                    if codes != expected_codes
+                }
+                if (
+                    rows != expected_rows
+                    or rows_by_year != expected_by_year
+                    or wrong_code_sets
+                ):
+                    raise RuntimeError(
+                        f"Incomplete area-year grid in {member}: rows={rows}, "
+                        f"expected={expected_rows}, rows_by_year={rows_by_year}, "
+                        f"code_set_errors={wrong_code_sets}"
+                    )
+
+            health_member = f"{prefix}adi-{level}-health.csv"
+            with archive.open(health_member) as health_csv:
+                header = health_csv.readline().decode("utf-8")
+            leaked = sorted(code for code in DROP_HEALTH if f"{code}_" in header)
+            if leaked:
+                raise RuntimeError(f"Dropped health metrics leaked into {health_member}: {leaked}")
 
 
 def _promote_files(staged_root: Path, live_root: Path, owns) -> list[Path]:
@@ -457,45 +597,92 @@ Autonomy Data Unit, Autonomy Institute
 https://adi.apps.autonomy.work
 
 CONTENTS
-  adi-{level}-employment.csv   Universal Credit claimant counts (Nomis NM_162_1)
-  adi-{level}-crime.csv        Police-recorded street crime (data.police.uk)
-  adi-{level}-health.csv       GP disease prevalence, QOF (NHS Digital), 21 conditions
+  adi-{level}-employment.csv       Claimant Count, Nomis NM_162_1
+  adi-{level}-crime.csv            Police-recorded street crime, data.police.uk
+  adi-{level}-health.csv           Modelled QOF prevalence, 21 conditions
+  adi-{level}-data-dictionary.csv  Metric labels, columns, units, sources and availability
+  adi-{level}-geography.csv        Current LAD and region codes/names for each area
 
-Each file is long by year: one row per area per year, with a `year` column.
-Areas are 2021 LSOA boundaries, rolled up to 2025 local authority and region
-boundaries.
+SHAPE AND GEOGRAPHY
+  Each domain CSV is UTF-8, long by year, and contains exactly {row_count:,} data
+  rows: {area_count:,} unique areas x 12 years (2014-2025). `code`, `name` and
+  `year` identify a row. Missing values are empty fields; numeric zero is a
+  published value, not the missing-value marker (and may reflect source rounding).
 
-POPULATION AND COVERAGE
-  `pop` is the ONS mid-year population estimate for ALL AGES (Nomis NM_2014_1,
-  2021 LSOA vintage) for that year. It is not an adult-only or working-age base.
-  Every count column has a matching `<count>_pop`: the population actually covered
-  by that metric. Every `_rate` is count / `<count>_pop`, not count / `pop`.
-  At LSOA level `<count>_pop` equals `pop` when measured and is blank when not; at
-  higher levels it can be smaller than `pop` where some child areas were not measured.
-  2025 uses the 2024 estimate, because the ONS series stops at 2024.
+  LSOAs use 2021 boundaries and are rolled up to 2025 local authority district
+  (LAD) and region boundaries. This release contains 33,749 of England's 33,755
+  2021 LSOAs; six complex 2011-to-2021 boundary-change LSOAs are excluded. The
+  geography CSV supplies the current parent codes and names needed to select a
+  council or region. Higher-level `pop` values sum the 33,749 included LSOAs.
+
+POPULATION, COUNTS AND RATES
+  `pop` is the ONS mid-year population estimate for all ages (Nomis NM_2014_1,
+  2021 LSOA vintage) for that area and year. It is not an adult or working-age
+  denominator. The 2025 value repeats 2024 because the source series ends in 2024.
+
+  Each metric is a three-column group:
+    `<count>`       the metric count or modelled count
+    `<count>_pop`   the population covered by that count
+    `<count>_rate`  round(`<count>` / `<count>_pop`, 8)
+
+  Use the metric-specific `<count>_pop`, not `pop`, to reproduce a nonblank rate.
+  Counts may be fractional and retain the decimal precision needed to reproduce
+  the published eight-decimal rate. At LSOA level, a measured metric's coverage
+  population normally equals `pop`; all three metric fields are blank when it is
+  unavailable. At higher levels, coverage population can be below `pop` because
+  it sums only LSOAs with that metric available.
+
+COUNT SEMANTICS
+  Employment `claimant_count` is the mean of 12 monthly Claimant Count values in
+  the calendar year. Claimant Count combines Jobseeker's Allowance with the
+  relevant Universal Credit component: UC claimants not in employment early in
+  the series, then those in the `Searching for Work` conditionality regime from
+  April 2015. The same person can appear in both components. Nomis independently
+  rounds each monthly observation to the nearest five before download. The annual
+  value is therefore neither unique claimants nor a sum of monthly values.
+
+  Crime counts are annual police-recorded street incidents assigned or apportioned
+  to LSOAs. British Transport Police incidents are excluded. They are not a survey
+  estimate of all crime.
+
+  Health `_afflicted` values are modelled estimates, not observed resident counts.
+  They combine published GP-practice QOF prevalence with LSOA GP-registration
+  patterns; fractional people are therefore expected. Source gaps of at most two
+  consecutive years may be filled along an LSOA series (linear interpolation for
+  interior gaps, regression extrapolation at an end). The CSV has no per-cell flag
+  distinguishing those filled estimates.
 
 YEARS
-  Employment and crime years are CALENDAR years.
-  Health years are QOF years, which run April to March and are labelled here by
-  the year they END. Health `2021` therefore covers April 2020 to March 2021.
-  Comparing the three domains for one labelled year compares slightly different
-  periods.
+  Employment and crime use calendar years. Health uses QOF financial years and is
+  labelled by the ending year: health `2021` means QOF 2020-21 (April 2020 to
+  March 2021). A shared year label therefore does not mean identical periods.
 
-KNOWN GAPS — these are empty cells, never zeros
-  The pipeline rejects a force-year unless all 12 monthly police files are present
-  and non-empty. British Transport Police gaps make crime unavailable everywhere in
-  2016 and 2025. Greater Manchester is unavailable from 2019 onward; Devon &
-  Cornwall is additionally unavailable in 2022. Higher-level counts and rates use
-  each metric's explicit `<count>_pop` reporting denominator.
+AVAILABILITY AND ADJUSTMENTS
+  Crime input is accepted only when all 12 monthly force files are present and
+  non-empty. All 10 Greater Manchester LADs and their LSOAs are blank from 2019
+  through 2025. In 2022, the 12 LADs in the Devon & Cornwall Police force area
+  and the City of London are also blank. Region and England rows remain available
+  on their reduced metric-specific coverage populations.
 
-  Health figures for the year labelled 2021 (QOF 2020-21) under-record across
-  all conditions because routine GP activity collapsed during the pandemic.
-  We recommend not using that year for trend analysis.
+  Three LSOAs (Camden 028D, Tower Hamlets 015B and Westminster 018C) have no
+  health values in 2014. Non-diabetic hyperglycaemia (NDH) is blank through 2020
+  and also blank for 16 LSOAs in its first year, 2021. Eight LSOA epilepsy (EP)
+  values in 2016 and seven LSOA heart-failure (HF) values in 2021 were rejected
+  as implausible one-year spikes; aggregate coverage excludes those values.
 
-  Smoking, hypothyroidism and CVD primary prevention are NOT included. NHS
-  Digital stopped publishing them as QOF prevalence groups (smoking and
-  hypothyroidism after 2013-14, CVD primary prevention after 2019-20), so no
-  later figures exist at any geography.
+  Depression (DEP) in 2024 is interpolated from adjacent LSOA rates. Osteoporosis
+  (OST) in 2015 is likewise interpolated for 33,746 LSOAs; the three LSOAs without
+  a 2014 anchor remain blank. Both corrected metrics are reaggregated from LSOAs.
+
+  NHS Digital warns that QOF 2020-21 implementation changes may make indicator
+  values inaccurate and comparisons with earlier years unreliable. Obesity was
+  particularly affected, and asthma and COPD register definitions changed. This
+  is a comparability warning, not evidence that every condition moved downward.
+  See https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data/2020-21
+
+  Smoking (SMOK), hypothyroidism (THY) and CVD primary prevention (CVDPP) are
+  excluded because they do not provide a complete 2014-2025 prevalence series.
+  Exact per-metric availability and definitions are in the data dictionary.
 
 LICENCE
   Open Government Licence v3.0. Boundaries (c) ONS / Crown copyright.
@@ -507,12 +694,258 @@ _LEVEL_LABELS = {"england": "England", "region": "Regions",
                  "lad": "Local authorities", "lsoa": "Neighbourhoods (LSOA)"}
 _DOMAIN_FILES = {"employment": "employment", "crime": "crime", "health": "health"}
 
+
+def _metric_count_columns(columns) -> list[str]:
+    """Return count columns in source order and reject an unpaired metric schema."""
+    columns = list(columns)
+    count_columns = [
+        column for column in columns
+        if f"{column}{COUNT_POP_SUFFIX}" in columns and f"{column}_rate" in columns
+    ]
+    metric_columns = {
+        column
+        for count_col in count_columns
+        for column in (count_col, f"{count_col}{COUNT_POP_SUFFIX}", f"{count_col}_rate")
+    }
+    schema_columns = {
+        column for column in columns
+        if column.endswith("_rate") or column.endswith(COUNT_POP_SUFFIX)
+    }
+    if schema_columns - metric_columns:
+        raise ValueError(f"Unpaired metric columns: {sorted(schema_columns - metric_columns)}")
+    return count_columns
+
+
+def _serialise_download_table(tidy: pd.DataFrame, member: str) -> tuple[pd.DataFrame, int]:
+    """Format a CSV while preserving exact rate reproducibility at eight decimals."""
+    tidy = tidy.copy()
+    pop_cols = [c for c in tidy if c == "pop" or c.endswith(COUNT_POP_SUFFIX)]
+    for column in pop_cols:
+        observed = tidy[column].dropna()
+        non_integer = ~np.isclose(observed, observed.round(), rtol=0, atol=1e-9)
+        if non_integer.any():
+            raise ValueError(
+                f"{member}:{column} contains non-whole coverage populations: "
+                f"{observed[non_integer].head().tolist()}"
+            )
+        tidy[column] = tidy[column].round().astype("Int64")
+
+    max_decimals = 3
+    for count_col in _metric_count_columns(tidy.columns):
+        covered_col = f"{count_col}{COUNT_POP_SUFFIX}"
+        rate_col = f"{count_col}_rate"
+        triple = tidy[[count_col, covered_col, rate_col]]
+        present = triple.notna()
+        partial = present.any(axis=1) & ~present.all(axis=1)
+        if partial.any():
+            sample = tidy.loc[partial, ["code", "year", *triple.columns]].head()
+            raise ValueError(f"Partially blank metric triple in {member}:\n{sample}")
+
+        valid = present.all(axis=1)
+        if (tidy.loc[valid, covered_col] <= 0).any():
+            raise ValueError(f"{member}:{covered_col} contains a non-positive denominator")
+
+        source_count = tidy[count_col].copy()
+        formula_rate = source_count / tidy[covered_col]
+        drift = valid.copy()
+        drift.loc[valid] = ~np.isclose(
+            formula_rate.loc[valid], tidy.loc[valid, rate_col], rtol=0, atol=5e-15
+        )
+        if drift.any():
+            sample = tidy.loc[
+                drift, ["code", "year", count_col, covered_col, rate_col]
+            ].head()
+            raise ValueError(
+                f"Upstream rate is not count / coverage population in {member}:{count_col}:\n"
+                f"{sample}"
+            )
+        # Calculate the displayed rate from the formula, rather than independently
+        # rounding a binary-float source value that can sit either side of an exact tie.
+        published_rate = formula_rate.round(8)
+        published_count = source_count.round(3)
+        reproduced = (published_count / tidy[covered_col]).round(8)
+        pending = valid & ~reproduced.eq(published_rate)
+
+        for decimals in range(4, 12):
+            pending_index = pending[pending].index
+            if pending_index.empty:
+                break
+            candidate = source_count.loc[pending_index].round(decimals)
+            matches = (
+                (candidate / tidy.loc[pending_index, covered_col]).round(8)
+                .eq(published_rate.loc[pending_index])
+            )
+            matched_index = matches[matches].index
+            if not matched_index.empty:
+                published_count.loc[matched_index] = candidate.loc[matched_index]
+                pending.loc[matched_index] = False
+                max_decimals = max(max_decimals, decimals)
+
+        if pending.any():
+            sample = tidy.loc[
+                pending, ["code", "year", count_col, covered_col, rate_col]
+            ].head()
+            raise ValueError(
+                f"Could not serialise {member}:{count_col} reproducibly at <=11 decimals:\n"
+                f"{sample}"
+            )
+
+        tidy[count_col] = published_count
+        tidy[rate_col] = published_rate
+
+    return tidy, max_decimals
+
+
+def _data_dictionary(level: str) -> pd.DataFrame:
+    common = {
+        "geography_level": level,
+        "coverage_population_definition": (
+            "All-age population covered by this metric count; use this column as the rate denominator"
+        ),
+        "rate_unit": "proportion (0 to 1), rounded to 8 decimal places",
+    }
+    rows = [{
+        **common,
+        "domain": "employment",
+        "metric": "claimant_count",
+        "label": "Claimant Count",
+        "count_column": "claimant_count",
+        "count_unit": "mean monthly claimants (may be fractional)",
+        "count_definition": (
+            "Mean of 12 monthly Claimant Count values: JSA plus the relevant UC component "
+            "(not in employment early in the series; Searching for Work from April 2015)"
+        ),
+        "coverage_population_column": "claimant_count_pop",
+        "rate_column": "claimant_count_rate",
+        "first_year": 2014,
+        "last_year": 2025,
+        "source": "Nomis NM_162_1",
+        "availability_and_adjustments": (
+            "Calendar years; no metric-specific gaps. Nomis rounds monthly observations "
+            "to the nearest 5; JSA/UC double counting is possible"
+        ),
+    }]
+    for label, key in CRIME_TYPES:
+        count_col = label
+        rows.append({
+            **common,
+            "domain": "crime",
+            "metric": key,
+            "label": label,
+            "count_column": count_col,
+            "count_unit": "police-recorded street incidents (may be fractional after apportionment)",
+            "count_definition": (
+                "Annual incidents assigned or apportioned to LSOAs; British Transport Police excluded"
+            ),
+            "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
+            "rate_column": f"{count_col}_rate",
+            "first_year": 2014,
+            "last_year": 2025,
+            "source": "data.police.uk",
+            "availability_and_adjustments": (
+                "Calendar years. Greater Manchester LADs/LSOAs blank 2019-2025; "
+                "12 Devon & Cornwall force-area LADs/LSOAs and City of London also blank in 2022"
+            ),
+        })
+    for code, label in HEALTH:
+        count_col = f"{code}_afflicted"
+        notes = [
+            "QOF financial year labelled by ending year",
+            "3 LSOAs lack all health metrics in 2014",
+        ]
+        if code == "NDH":
+            notes.append("blank through 2020; 16 LSOAs also blank in 2021")
+        if code == "EP":
+            notes.append("8 implausible LSOA values rejected in 2016")
+        if code == "HF":
+            notes.append("7 implausible LSOA values rejected in 2021")
+        if code == "DEP":
+            notes.append("2024 LSOA rates interpolated from 2023 and 2025")
+        if code == "OST":
+            notes.append(
+                "2015 rates interpolated for 33,746 LSOAs; 3 without a 2014 anchor remain blank"
+            )
+        rows.append({
+            **common,
+            "domain": "health",
+            "metric": code,
+            "label": label,
+            "count_column": count_col,
+            "count_unit": "modelled people (fractional)",
+            "count_definition": (
+                "Modelled LSOA-resident estimate from GP-practice QOF prevalence and "
+                "LSOA GP-registration patterns; not an observed patient count; short "
+                "source gaps may be interpolated or extrapolated"
+            ),
+            "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
+            "rate_column": f"{count_col}_rate",
+            "first_year": 2021 if code == "NDH" else 2014,
+            "last_year": 2025,
+            "source": "NHS Digital / NHS England QOF",
+            "availability_and_adjustments": "; ".join(notes),
+        })
+    columns = [
+        "domain", "metric", "label", "geography_level",
+        "count_column", "count_unit", "count_definition",
+        "coverage_population_column", "coverage_population_definition",
+        "rate_column", "rate_unit", "first_year", "last_year", "source",
+        "availability_and_adjustments",
+    ]
+    return pd.DataFrame(rows)[columns]
+
+
+def _geography_dictionary(level: str) -> pd.DataFrame:
+    rows = []
+    for code in codes_by_level[level]:
+        lad_code = ""
+        region_code = ""
+        if level == "lsoa":
+            if code not in _lsoa_geo.index:
+                raise ValueError(f"No current parent geography for LSOA {code}")
+            lad_code = _lsoa_geo.at[code, "LAD25CD"]
+            region_code = _lsoa_geo.at[code, "RGN25CD"]
+        elif level == "lad":
+            lad_code = code
+            matches = lu_rgn0.loc[lu_rgn0["LAD25CD"] == code, "RGN25CD"]
+            if len(matches) != 1:
+                raise ValueError(f"Expected one current region for LAD {code}; found {len(matches)}")
+            region_code = matches.iloc[0]
+        elif level == "region":
+            region_code = code
+
+        if lad_code and lad_code not in names_by_level["lad"]:
+            raise ValueError(f"No published LAD name for {lad_code}")
+        if region_code and region_code not in names_by_level["region"]:
+            raise ValueError(f"No published region name for {region_code}")
+        rows.append({
+            "code": code,
+            "name": names_by_level[level][code],
+            "geography_level": level,
+            "lad_code": lad_code,
+            "lad_name": names_by_level["lad"].get(lad_code, ""),
+            "region_code": region_code,
+            "region_name": names_by_level["region"].get(region_code, ""),
+        })
+    return pd.DataFrame(rows)
+
+
+def _write_public_zip_member(archive: zipfile.ZipFile, name: str, payload: str) -> None:
+    """Write a regular, world-readable text member instead of ZipFile's 0600 default."""
+    info = zipfile.ZipInfo(name, date_time=time.localtime()[:6])
+    info.create_system = 3
+    info.external_attr = (stat.S_IFREG | 0o644) << 16
+    archive.writestr(
+        info, payload, compress_type=zipfile.ZIP_DEFLATED, compresslevel=9
+    )
+
+
 DOWNLOADS.mkdir(parents=True, exist_ok=True)
-_generated = pd.Timestamp.utcnow().strftime("%Y-%m-%d")
+_generated = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
 _bundle_index = []
 
 for lv in LEVELS:
     members = {}
+    bundle_max_decimals = 3
     for dom in _DOMAIN_FILES:
         frames = []
         for yr in sorted(data[lv][dom]):
@@ -528,41 +961,47 @@ for lv in LEVELS:
             drop_cols = [c for c in tidy.columns
                          if any(c.startswith(f"{code}_") for code in DROP_HEALTH)]
             tidy = tidy.drop(columns=drop_cols)
-        lead = [c for c in ("code", "name", "year") if c in tidy.columns]
-        tidy = tidy[lead + [c for c in tidy.columns if c not in lead]]
+        lead = [c for c in ("code", "name", "year", "pop") if c in tidy.columns]
+        count_cols = _metric_count_columns(tidy.columns)
+        metric_cols = [
+            column for count_col in count_cols
+            for column in (count_col, f"{count_col}{COUNT_POP_SUFFIX}", f"{count_col}_rate")
+        ]
+        ordered = lead + metric_cols
+        leftovers = [c for c in tidy.columns if c not in ordered]
+        if leftovers:
+            raise ValueError(f"Unclassified columns in adi-{lv}-{dom}.csv: {leftovers}")
+        tidy = tidy[ordered]
         tidy = tidy.sort_values(["code", "year"], kind="stable")
-
-        # Format per column kind rather than with a global float_format, which
-        # renders population as 5.43612e+07. `pop` and every metric-specific
-        # `<count>_pop` are whole people; rates need precision; counts can be
-        # fractional (claimant counts are 12-month means, health counts are modelled).
-        pop_cols = [c for c in tidy.columns if c == "pop" or c.endswith(COUNT_POP_SUFFIX)]
-        for c in pop_cols:
-            tidy[c] = tidy[c].round().astype("Int64")
-        for c in tidy.columns:
-            if c in ("code", "name", "year") or c in pop_cols:
-                continue
-            tidy[c] = tidy[c].round(8 if c.endswith("_rate") else 3)
-        members[f"adi-{lv}-{dom}.csv"] = tidy.to_csv(index=False)
+        member_name = f"adi-{lv}-{dom}.csv"
+        tidy, max_decimals = _serialise_download_table(tidy, member_name)
+        bundle_max_decimals = max(bundle_max_decimals, max_decimals)
+        members[member_name] = tidy.to_csv(index=False)
 
     if not members:
         continue
     members["README.txt"] = DL_README.format(
-        level=lv, level_label=_LEVEL_LABELS[lv], generated=_generated)
+        level=lv, level_label=_LEVEL_LABELS[lv], generated=_generated,
+        area_count=len(codes_by_level[lv]), row_count=len(codes_by_level[lv]) * len(YEARS))
+    members[f"adi-{lv}-data-dictionary.csv"] = _data_dictionary(lv).to_csv(index=False)
+    members[f"adi-{lv}-geography.csv"] = _geography_dictionary(lv).to_csv(index=False)
 
     zip_path = DOWNLOADS / f"adi-{lv}.zip"
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name, payload in members.items():
-            z.writestr(f"adi-{lv}/{name}", payload)
+            _write_public_zip_member(z, f"adi-{lv}/{name}", payload)
     size = zip_path.stat().st_size
     _bundle_index.append({
         "level": lv,
         "label": _LEVEL_LABELS[lv],
         "file": f"downloads/{zip_path.name}",
         "bytes": size,
-        "size": (f"{size/1_048_576:.1f} MB" if size >= 1_048_576 else f"{size/1024:.0f} KB"),
+        "size": (f"{size/1_000_000:.1f} MB" if size >= 1_000_000 else f"{size/1_000:.0f} KB"),
     })
-    print(f"  {lv}: {zip_path.name} ({_bundle_index[-1]['size']})")
+    print(
+        f"  {lv}: {zip_path.name} ({_bundle_index[-1]['size']}; "
+        f"counts use at most {bundle_max_decimals} decimals)"
+    )
 
 # Download index: written here because it carries the per-level area counts,
 # which are only canonical once codes_by_level exists.
