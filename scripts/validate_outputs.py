@@ -92,8 +92,12 @@ Checks and thresholds (all documented inline; tune in the CONSTANTS block)
 
 6. COVERAGE.
    - no gaps in the per-domain year sequence                 -> BLOCKER
-   - full metric/column set present
-     (24 health conditions, 14 crime types)                  -> BLOCKER
+   - every expected metric carries its whole triple in EVERY year -- the count,
+     the population that count covers, and the rate           -> BLOCKER
+     (24 health conditions in their publication windows, 14 crime types, the
+     claimant count). A count column quietly disappearing mid-series is the
+     column-level twin of a count column quietly going NaN: the rate survives,
+     looks fine, and nothing downstream can tell the numerator is gone.
    - every domain-year carries the SAME area codes as the run's canonical set
      for that level                                          -> BLOCKER
      51 LSOA-years once vanished from the health outputs because whole practice
@@ -343,6 +347,20 @@ def count_columns(df: pd.DataFrame, domain: str) -> list[str]:
             if f"{c}_afflicted" in df.columns]
 
 
+def expected_count_columns(domain: str, year_label: str) -> list[str]:
+    """Count columns a domain-year is required to carry.
+
+    Health groups outside their QOF publication window are excluded: their
+    absence is correct, and check_series rejects a *value* there separately.
+    """
+    if domain == "claimant_counts":
+        return ["claimant_count"]
+    if domain == "crime":
+        return list(CRIME_TYPES)
+    return [f"{c}_afflicted" for c in HEALTH_CONDITIONS
+            if qof_group_published(c, year_label)]
+
+
 def metric_pop_col(count_col: str) -> str:
     """The population a given count actually covers.
 
@@ -556,21 +574,23 @@ def check_coverage(report, geo, domain, data, canonical_codes=None):
         report.add(domain, "(coverage)", geo, None, None, None,
                    f"no files found for {domain}", "BLOCKER")
         return
-    last_lbl = data["__order__"][-1]
-    cols = set(data[last_lbl].columns)
-    if domain == "health":
-        for c in HEALTH_CONDITIONS:
-            if not qof_group_published(c, last_lbl):
-                continue  # withdrawn from QOF by this year -- absence is correct
-            if f"{c}_afflicted_rate" not in cols:
-                report.add(domain, f"{c}_afflicted_rate", geo, last_lbl, None,
-                           None, "missing expected health condition column",
-                           "BLOCKER")
-    elif domain == "crime":
-        for t in CRIME_TYPES:
-            if f"{t}_rate" not in cols:
-                report.add(domain, f"{t}_rate", geo, last_lbl, None, None,
-                           "missing expected crime type column", "BLOCKER")
+    # Every expected metric must carry its whole triple -- the count, the
+    # population that count covers, and the rate -- in EVERY year, not just the
+    # most recent file. A count column quietly disappearing mid-series is the
+    # column-level twin of a count column quietly going NaN: the rate survives,
+    # looks fine, and nothing downstream can tell the numerator is gone.
+    for lbl in data["__order__"]:
+        cols = set(data[lbl].columns)
+        if "pop" not in cols:
+            report.add(domain, "pop", geo, lbl, None, None,
+                       "missing the area population column", "BLOCKER")
+        for cnt in expected_count_columns(domain, lbl):
+            for col, what in ((cnt, "count"),
+                              (metric_pop_col(cnt), "covered population"),
+                              (f"{cnt}_rate", "rate")):
+                if col not in cols:
+                    report.add(domain, col, geo, lbl, None, None,
+                               f"missing expected {what} column", "BLOCKER")
 
     # ---- area-set completeness -------------------------------------------- #
     if canonical_codes is None:
@@ -652,11 +672,14 @@ def check_series(report, geo, domain, area_name, metric, labels, rates, counts,
         # publish this group that year, so there is nothing a number here can
         # legitimately mean.
         if not in_window:
+            gloss = ("0.0 here asserts the disease was measured at nil "
+                     "prevalence" if abs(v) <= EPS else
+                     f"{v:.6g} is a fabricated value -- there is no source "
+                     f"figure it could have come from")
             report.add(domain, metric, geo, lbl, v,
                        f"window={QOF_GROUP_WINDOW[condition_of(metric)]}",
-                       "value published for a QOF group NHS Digital did not "
-                       "collect that year (0.0 here asserts 'measured at nil')",
-                       "BLOCKER",
+                       f"value published for a QOF group NHS Digital did not "
+                       f"collect that year; {gloss}", "BLOCKER",
                        group=_grp(level, domain, metric, lbl, "qof-window"))
             continue
         # ---- bounds ----
