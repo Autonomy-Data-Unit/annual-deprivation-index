@@ -49,7 +49,8 @@ export const fmtNum = (v, d = 0) => (v == null ? '—' : (+v).toLocaleString('en
 /** Sequential slate ramp (matches tokens --seq-*). */
 export const SEQ = ['#f3f5f7', '#d7dde3', '#b3bdc7', '#8b97a4', '#636f7d', '#424b56', '#262c33'];
 export const DIV = ['#1f6f6b', '#4f9a93', '#97c4bf', '#eceef0', '#e0b48f', '#c77f4d', '#9c4a22'];
-export const NODATA = '#eeeeee';
+// Warm base for the hatched missing-data treatment; deliberately outside the cool data ramp.
+export const NODATA = '#e2d6c4';
 
 /** Class index (0..breaks.length) for a value given quantile breaks. */
 export function classOf(v, breaks) {
@@ -72,4 +73,4 @@ export function divColorFor(v, m) {
   return DIV[idx];
 }
 
-export const DOMAIN_HUES = { employment: '#b8860b', crime: '#6b5b95', health: '#2f7d6f' };
+export const DOMAIN_HUES = { employment: '#856100', crime: '#6b5b95', health: '#2f7d6f' };

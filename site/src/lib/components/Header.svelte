@@ -29,11 +29,11 @@
       </span>
     </a>
 
-    <button class="burger" aria-label="Menu" aria-expanded={open} onclick={() => (open = !open)}>
+    <button class="burger" aria-label="Menu" aria-expanded={open} aria-controls="site-navigation" onclick={() => (open = !open)}>
       <span></span><span></span><span></span>
     </button>
 
-    <nav class="nav" class:open>
+    <nav id="site-navigation" class="nav" class:open aria-label="Primary">
       {#each nav as item}
         <a href="{base}{item.href}" class="nav__link" aria-current={isActive(item.href) ? 'page' : undefined} onclick={() => (open = false)}>
           {item.label}

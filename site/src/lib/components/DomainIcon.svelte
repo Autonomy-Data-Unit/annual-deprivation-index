@@ -1,7 +1,6 @@
 <script>
   // Domain line-icons (employment / crime / health). Stroke = currentColor.
   let { domain, size = 24, stroke = 1.5 } = $props();
-  const labels = { employment: 'Employment', crime: 'Crime', health: 'Health' };
 </script>
 
 <svg
@@ -13,10 +12,9 @@
   stroke-width={stroke}
   stroke-linecap="round"
   stroke-linejoin="round"
-  role="img"
-  aria-label={labels[domain]}
+  aria-hidden="true"
+  focusable="false"
 >
-  <title>{labels[domain]}</title>
   {#if domain === 'employment'}
     <rect x="3" y="8" width="18" height="12" />
     <path d="M9 8 V6.5 a1.5 1.5 0 0 1 1.5 -1.5 h3 a1.5 1.5 0 0 1 1.5 1.5 V8" />

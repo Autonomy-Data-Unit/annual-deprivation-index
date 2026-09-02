@@ -68,7 +68,7 @@ button { font: inherit; cursor: pointer; }
 }
 .btn:hover { background: #000; }
 .btn--accent { background: var(--accent); border-color: var(--accent); color: var(--ink); }
-.btn--accent:hover { background: var(--accent-deep); }
+.btn--accent:hover { background: var(--accent-deep); color: var(--paper); }
 .btn--ghost { background: transparent; color: var(--ink); border-color: var(--grey-2); }
 .btn--ghost:hover { border-color: var(--ink); background: transparent; }
 
@@ -100,4 +100,4 @@ input[type="range"] { accent-color: var(--accent-deep); width: 100%; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .skip-link { position: absolute; left: -999px; top: 0; background: var(--ink); color: #fff; padding: 8px 12px; z-index: 1000; }
 .skip-link:focus { left: 8px; top: 8px; }
-:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

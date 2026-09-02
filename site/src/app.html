@@ -7,19 +7,21 @@
     <link rel="apple-touch-icon" sizes="180x180" href="%sveltekit.assets%/apple-touch-icon-180.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#333333" />
+    <title>ADI: the Annual Deprivation Index for England</title>
     <meta name="description" content="An annual, absolute measure of deprivation across England covering employment, crime and health, at neighbourhood, local-authority, regional and national level, from 2014 to 2025. A product of the Autonomy Data Unit." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Annual Deprivation Index" />
     <meta property="og:title" content="ADI: the Annual Deprivation Index for England" />
     <meta property="og:description" content="Absolute rates of deprivation across England (employment, crime and health), measured every year from 2014 to 2025. By the Autonomy Data Unit." />
-    <meta property="og:url" content="https://adi.apps.autonomy.work/" />
-    <meta property="og:image" content="https://adi.apps.autonomy.work/og-image.png" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta name="twitter:card" content="summary_large_image" />
+    <meta property="og:image" content="https://adi.apps.autonomy.work/apple-touch-icon-180.png" />
+    <meta property="og:image:width" content="180" />
+    <meta property="og:image:height" content="180" />
+    <meta property="og:image:alt" content="Annual Deprivation Index logo" />
+    <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content="ADI: the Annual Deprivation Index for England" />
     <meta name="twitter:description" content="Absolute rates of deprivation across England (employment, crime and health), measured every year from 2014 to 2025." />
-    <meta name="twitter:image" content="https://adi.apps.autonomy.work/og-image.png" />
+    <meta name="twitter:image" content="https://adi.apps.autonomy.work/apple-touch-icon-180.png" />
+    <meta name="twitter:image:alt" content="Annual Deprivation Index logo" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -29,6 +31,20 @@
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">
+    <noscript>
+      <main style="max-width: 48rem; margin: 3rem auto; padding: 0 1.5rem; font: 1rem/1.6 system-ui, sans-serif; color: #1e1e2e">
+        <h1>Annual Deprivation Index</h1>
+        <p>This interactive site needs JavaScript. The ADI measures employment, crime and health deprivation across England every year from 2014 to 2025.</p>
+        <h2>Download the data without JavaScript</h2>
+        <ul>
+          <li><a href="%sveltekit.assets%/downloads/adi-england.zip">England CSV bundle</a></li>
+          <li><a href="%sveltekit.assets%/downloads/adi-region.zip">Region CSV bundle</a></li>
+          <li><a href="%sveltekit.assets%/downloads/adi-lad.zip">Local-authority CSV bundle</a></li>
+          <li><a href="%sveltekit.assets%/downloads/adi-lsoa.zip">Neighbourhood (LSOA) CSV bundle</a> — 88.3 MB ZIP</li>
+        </ul>
+        <p><a href="%sveltekit.assets%/annual-deprivation-index-paper.pdf">Read the methodology paper (PDF)</a> or <a href="https://github.com/Autonomy-Data-Unit/annual-deprivation-index">inspect the open-source pipeline</a>.</p>
+      </main>
+    </noscript>
     <div style="display: contents">%sveltekit.body%</div>
   </body>
 </html>

@@ -22,9 +22,10 @@
   --bg:          #f8f8fa;   /* light app background                           */
 
   --accent:      #fbc441;   /* Autonomy golden — used sparingly               */
-  --accent-deep: #eab843;   /* golden hover / active                          */
+  --accent-deep: #765700;   /* accessible gold for text / control states       */
+  --focus:       #a87900;   /* focus ring: >= 3:1 against white and #333       */
 
-  --grey-1:      #898989;   /* muted text                                     */
+  --grey-1:      #666666;   /* muted text — >= 5.4:1 on light surfaces         */
   --grey-2:      #cccccc;   /* borders / dividers                             */
   --grey-3:      #eeeeee;   /* hairlines / subtle fills                       */
 
@@ -58,7 +59,7 @@
   --div-pos-3: #9c4a22;   /* strong worsening                                */
 
   /* Out-of-range / no-data fill for maps */
-  --map-nodata: var(--grey-3);
+  --map-nodata: #e2d6c4;   /* warm base, paired with hatching in map components  */
   --map-stroke: var(--paper);   /* thin boundary lines between areas         */
 
   /* ---- Domain hues (chips/labels only; maps still use --seq-*) ----------

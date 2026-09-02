@@ -5,12 +5,12 @@
   const n = $derived(Math.min(ramp.length, breaks.length + 1));
 </script>
 
-<div class="lg">
+<div class="lg" role="group" aria-label={title ? `${title} legend` : 'Map legend'}>
   {#if title}<div class="lg__title">{title}</div>{/if}
   <div class="lg__row">
     {#each Array(n) as _, i}
       <div class="lg__cell">
-        <span class="lg__sw" style="background:{ramp[i]}"></span>
+        <span class="lg__sw" style="background:{ramp[i]}" aria-hidden="true"></span>
       </div>
     {/each}
   </div>
@@ -21,7 +21,7 @@
     {/each}
   </div>
   {#if nodata}
-    <div class="lg__nd"><span class="lg__sw" style="background:var(--map-nodata)"></span> No data</div>
+    <div class="lg__nd"><span class="lg__sw lg__sw--nodata" aria-hidden="true"></span> No data</div>
   {/if}
 </div>
 
@@ -34,4 +34,8 @@
   .lg__ticks { display: flex; justify-content: space-between; margin-top: 2px; color: var(--grey-1); font-family: var(--font-mono); font-size: 10px; }
   .lg__nd { display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; color: var(--grey-1); }
   .lg__nd .lg__sw { width: 12px; height: 12px; }
+  .lg__sw--nodata {
+    background-color: var(--map-nodata);
+    background-image: repeating-linear-gradient(135deg, transparent 0 3px, #796348 3px 5px);
+  }
 </style>

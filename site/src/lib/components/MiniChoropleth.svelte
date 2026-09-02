@@ -2,9 +2,9 @@
   import { colorFor, SEQ } from '$lib/data.js';
   // Lightweight SVG choropleth for England (region/LAD geojson). No MapLibre.
   let {
-    geojson,                 // FeatureCollection
+    geojson,
     codeProp = 'LAD25CD',
-    values = {},             // code -> value
+    values = {},
     breaks = [],
     ramp = SEQ,
     width = 360,
@@ -12,10 +12,13 @@
     selected = null,
     interactive = false,
     onpick = null,
-    nameProp = null
+    nameProp = null,
+    accessibleTitle = 'Map of England',
+    valueFormat = (v) => v == null ? 'No data' : `${(v * 100).toFixed(1)}%`
   } = $props();
+  const uid = $props.id();
+  const patternId = `${uid}-nodata`;
 
-  // projection: equirectangular with cos(midLat) aspect correction, fit to bbox
   const proj = $derived.by(() => {
     if (!geojson) return null;
     let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
@@ -54,41 +57,83 @@
     else if (geom.type === 'MultiPolygon') for (const poly of geom.coordinates) for (const r of poly) d += ringPath(r);
     return d;
   }
+  function featureName(f) { return nameProp ? f.properties[nameProp] : f.properties[codeProp]; }
+  function featureLabel(f) { return `${featureName(f)}: ${valueFormat(values[f.properties[codeProp]])}`; }
   let hovered = $state(null);
 </script>
 
-<svg viewBox="0 0 {width} {height}" class="mc" class:interactive role="img" aria-label="Map of England">
-  {#if geojson && proj}
-    {#each geojson.features as f}
-      {@const code = f.properties[codeProp]}
-      {@const v = values[code]}
-      <path
-        d={featPath(f.geometry)}
-        fill={colorFor(v, breaks, ramp)}
-        stroke={selected === code ? 'var(--accent)' : 'var(--paper)'}
-        stroke-width={selected === code ? 2 : 0.4}
-        class="mc__feat"
-        class:sel={selected === code}
-        role={interactive ? 'button' : undefined}
-        tabindex={interactive ? 0 : undefined}
-        aria-label={nameProp ? f.properties[nameProp] : code}
-        onmouseenter={() => interactive && (hovered = code)}
-        onmouseleave={() => interactive && (hovered = null)}
-        onclick={() => interactive && onpick && onpick(code, f.properties)}
-        onkeydown={(e) => interactive && e.key === 'Enter' && onpick && onpick(code, f.properties)}
-      />
-    {/each}
+<figure class="mc-wrap" aria-label={accessibleTitle}>
+  <svg viewBox="0 0 {width} {height}" class="mc" class:interactive
+    role={interactive ? 'group' : undefined} aria-label={interactive ? accessibleTitle : undefined}
+    aria-hidden={interactive ? undefined : 'true'} focusable="false">
+    <defs>
+      <pattern id={patternId} width="8" height="8" patternUnits="userSpaceOnUse">
+        <rect width="8" height="8" fill="var(--map-nodata)" />
+        <path d="M-2 2 L2 -2 M0 8 L8 0 M6 10 L10 6" stroke="#796348" stroke-width="2" />
+      </pattern>
+    </defs>
+    {#if geojson && proj}
+      {#each geojson.features as f}
+        {@const code = f.properties[codeProp]}
+        {@const v = values[code]}
+        {#if interactive}
+          <path
+            d={featPath(f.geometry)}
+            fill={v == null ? `url(#${patternId})` : colorFor(v, breaks, ramp)}
+            stroke={selected === code ? 'var(--accent)' : 'var(--paper)'}
+            stroke-width={selected === code ? 2 : 0.4}
+            class="mc__feat"
+            class:sel={selected === code}
+            role="button"
+            tabindex="0"
+            aria-label={featureLabel(f)}
+            onmouseenter={() => hovered = code}
+            onmouseleave={() => hovered = null}
+            onclick={() => onpick && onpick(code, f.properties)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                if (onpick) onpick(code, f.properties);
+              }
+            }}
+          />
+        {:else}
+          <path
+            d={featPath(f.geometry)}
+            fill={v == null ? `url(#${patternId})` : colorFor(v, breaks, ramp)}
+            stroke={selected === code ? 'var(--accent)' : 'var(--paper)'}
+            stroke-width={selected === code ? 2 : 0.4}
+            class="mc__feat"
+            class:sel={selected === code}
+          />
+        {/if}
+      {/each}
+    {/if}
+  </svg>
+  {#if interactive && hovered && nameProp}
+    <div class="mc__tip">{geojson.features.find((f) => f.properties[codeProp] === hovered)?.properties[nameProp]}</div>
   {/if}
-</svg>
-{#if interactive && hovered && nameProp}
-  <div class="mc__tip">{geojson.features.find((f) => f.properties[codeProp] === hovered)?.properties[nameProp]}</div>
-{/if}
+  {#if !interactive && geojson}
+    <figcaption class="visually-hidden">
+      <table>
+        <caption>{accessibleTitle}. Mapped values by area.</caption>
+        <thead><tr><th scope="col">Area</th><th scope="col">Value</th></tr></thead>
+        <tbody>
+          {#each geojson.features as f}
+            <tr><th scope="row">{featureName(f)}</th><td>{valueFormat(values[f.properties[codeProp]])}</td></tr>
+          {/each}
+        </tbody>
+      </table>
+    </figcaption>
+  {/if}
+</figure>
 
 <style>
+  .mc-wrap { margin: 0; }
   .mc { width: 100%; height: auto; display: block; }
   .mc__feat { transition: fill var(--dur-fast) linear; }
   .interactive .mc__feat { cursor: pointer; }
-  .interactive .mc__feat:hover { stroke: var(--ink); stroke-width: 1; }
+  .interactive .mc__feat:hover, .interactive .mc__feat:focus-visible { stroke: var(--ink); stroke-width: 1; }
   .mc__feat.sel { stroke: var(--accent); stroke-width: 2; }
   .mc__tip { font-size: var(--fs-1); color: var(--grey-1); margin-top: 4px; text-align: center; }
 </style>
