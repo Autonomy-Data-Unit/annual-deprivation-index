@@ -91,6 +91,45 @@ HEALTH_CONDITIONS = [
     "HYP", "LD", "MH", "NDH", "OB", "OST", "PAD", "PC", "RA", "STIA", "CVDPP",
     "SMOK", "THY",
 ]
+# QOF prevalence groups that NHS Digital stopped publishing, and the last QOF
+# year each appeared in. Outside its window a group is legitimately ABSENT: NaN
+# there is the correct representation of "not collected" and must not be
+# reported as missing data. Inside its window, a NaN is still a real defect.
+#
+# Before the aggregation fix these arrived as 0.0, which the validator was happy
+# with -- that is precisely the bug: a hard zero asserts the disease was
+# measured at nil prevalence.
+# (first, last) inclusive. Read off the raw NHS Digital prevalence files:
+# smoking and hypothyroidism appear only in 2013-14; CVD primary prevention
+# runs to 2019-20 and is replaced by non-diabetic hyperglycaemia in 2020-21.
+QOF_GROUP_WINDOW = {
+    "SMOK": ("2013-14", "2013-14"),
+    "THY": ("2013-14", "2013-14"),
+    "CVDPP": ("2013-14", "2019-20"),
+    "NDH": ("2020-21", None),
+}
+
+
+def qof_group_published(condition: str, year_label: str) -> bool:
+    """Was `condition` published in QOF year `year_label` (e.g. "2021-22")?
+
+    Labels are YYYY-YY and sort lexicographically in chronological order.
+    A group with no entry here is expected in every year.
+    """
+    window = QOF_GROUP_WINDOW.get(condition)
+    if window is None:
+        return True
+    first, last = window
+    if first is not None and year_label < first:
+        return False
+    return last is None or year_label <= last
+
+
+def condition_of(metric: str) -> str:
+    """Health condition code for a metric like "SMOK_afflicted_rate"."""
+    return metric.split("_", 1)[0]
+
+
 # 14 crime types expected in every crime file.
 CRIME_TYPES = [
     "Anti-social behaviour", "Bicycle theft", "Burglary",
@@ -246,6 +285,8 @@ def check_coverage(report, geo, domain, data):
     cols = set(data[last_lbl].columns)
     if domain == "health":
         for c in HEALTH_CONDITIONS:
+            if not qof_group_published(c, last_lbl):
+                continue  # withdrawn from QOF by this year -- absence is correct
             if f"{c}_afflicted_rate" not in cols:
                 report.add(domain, f"{c}_afflicted_rate", geo, last_lbl, None,
                            None, "missing expected health condition column",
@@ -274,6 +315,10 @@ def check_series(report, geo, domain, area_name, metric, labels,
     for i, (lbl, v) in enumerate(zip(labels, arr)):
         # ---- NaN where expected ----
         if not np.isfinite(v):
+            if domain == "health" and not qof_group_published(condition_of(metric), lbl):
+                # Not collected by NHS Digital that year. Correctly represented
+                # as missing rather than zero; not a data defect.
+                continue
             report.add(domain, metric, geo, lbl, v, None,
                        "value is NaN/missing where a value is expected",
                        "BLOCKER")
@@ -415,7 +460,15 @@ def check_england_vs_regions(report, base, run, domain):
             if col not in edf.columns or col not in rdf.columns:
                 continue
             e_val = float(edf.loc[ecode, col])
-            r_sum = float(rdf[col].sum())
+            r_sum = float(rdf[col].sum(min_count=1))
+            if not np.isfinite(e_val) and not np.isfinite(r_sum):
+                continue  # not collected at either level -- consistent
+            if not np.isfinite(e_val) or not np.isfinite(r_sum):
+                report.add(domain, col, "england-vs-regions", lbl, e_val,
+                           f"sum(regions)={r_sum:.4g}",
+                           "one of England / sum(regions) is missing and the "
+                           "other is not", "BLOCKER")
+                continue
             if abs(e_val) < EPS and abs(r_sum) < EPS:
                 continue
             denom = max(abs(e_val), EPS)
