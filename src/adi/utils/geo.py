@@ -5,6 +5,57 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+#: Suffix for the "population standing behind this count" column that accompanies
+#: every count column in the published outputs. See `covered_population`.
+COVERED_POP_SUFFIX = "_pop"
+
+
+def covered_population(
+    df: pd.DataFrame,
+    count_cols: list[str],
+    pop_col: str,
+) -> pd.DataFrame:
+    """Per row and per count column, the population that count actually covers.
+
+    A count is NaN where the area was not measured -- Greater Manchester's street
+    crime from 2019, a QOF disease group whose practices were not published, a
+    crime year where BTP never reported. Population is never NaN, so summing the
+    two independently produces a rate whose numerator covers less ground than its
+    denominator, and the published rate is understated by exactly the share of the
+    population that was never measured. England's 2019 burglary rate was computed
+    over 56.2m residents from a count that excluded Greater Manchester's 1,673
+    LSOAs; Camden's 2014 diabetes rate divided 220,568 people's registers by
+    221,095 people.
+
+    So every count column gets its own denominator: this area's population where
+    this count exists, NaN where it does not. Summed alongside the count, that
+    gives `{col}{COVERED_POP_SUFFIX}`, and `{col}_rate == {col} / {col}_pop`
+    holds exactly at every geography level.
+
+    `pop` keeps one meaning throughout: the ONS mid-year estimate for the whole
+    area, whatever was or was not measured in it. Dividing `{col}_pop` by `pop`
+    is how a reader sees the coverage.
+
+    Args:
+        df: Rows carrying the count columns and `pop_col`.
+        count_cols: Count columns to derive a denominator for.
+        pop_col: The area's full population column.
+
+    Returns:
+        DataFrame aligned to `df.index`, one `{col}{COVERED_POP_SUFFIX}` column
+        per entry in `count_cols`.
+    """
+    clashes = [c for c in count_cols if f"{c}{COVERED_POP_SUFFIX}" in df.columns]
+    if clashes:
+        raise ValueError(
+            f"Covered-population columns would overwrite existing ones: {clashes}. "
+            f"Rename the count column or the {COVERED_POP_SUFFIX!r} suffix."
+        )
+    return pd.DataFrame(
+        {f"{c}{COVERED_POP_SUFFIX}": df[pop_col].where(df[c].notna()) for c in count_cols},
+        index=df.index,
+    )
+
 
 def build_crosswalk(
     lsoa_xwalk_path: Path,
@@ -129,6 +180,18 @@ def aggregate_to_geography(
 
     Sums absolute counts and populations, then recomputes rates.
 
+    Two populations come out of this, and they answer different questions:
+
+    * `pop_col` is the area's full ONS mid-year population -- every LSOA in it,
+      measured or not. It means the same thing in every domain, level and year,
+      so the three domains agree on how many people live somewhere.
+    * `{col}{COVERED_POP_SUFFIX}` is the population behind `col` specifically,
+      and is what `{col}_rate` divides by. It equals `pop_col` wherever the whole
+      area was measured, and is smaller where it was not.
+
+    Aggregating a count over reporting areas and dividing it by everybody is what
+    made England's 2019 crime rates read ~5% low; see `covered_population`.
+
     Args:
         df: LSOA-level data.
         lookup: Lookup table mapping LSOAs to target geography.
@@ -139,7 +202,8 @@ def aggregate_to_geography(
         pop_col: Population column.
 
     Returns:
-        Aggregated DataFrame with geo code, name, counts, population, and rates.
+        Aggregated DataFrame with geo code, name, counts, population, per-count
+        covered populations, and rates.
     """
     # Merge with lookup
     merged = df.merge(
@@ -147,21 +211,26 @@ def aggregate_to_geography(
         on=lsoa_col, how="inner",
     )
 
-    # Sum counts and population by geography.
+    # Sum counts, population and per-count covered population by geography.
     # min_count=1 so an all-NaN group stays NaN rather than becoming 0 -- see
-    # the note in apply_crosswalk.
-    agg_cols = count_cols + [pop_col]
+    # the note in apply_crosswalk. A count and its covered population share the
+    # same NaN mask by construction, so they become NaN together: "nothing here
+    # was measured" rather than "nothing here was found".
+    covered = covered_population(merged, count_cols, pop_col)
+    agg_cols = count_cols + [pop_col] + list(covered.columns)
     result = (
-        merged.groupby([geo_code_col, geo_name_col])[agg_cols]
+        pd.concat([merged[[geo_code_col, geo_name_col] + count_cols + [pop_col]], covered], axis=1)
+        .groupby([geo_code_col, geo_name_col])[agg_cols]
         .sum(min_count=1)
         .reset_index()
     )
 
-    # Recompute rates
+    # Recompute rates against the population each count actually covers.
     for col in count_cols:
         rate_col = f"{col}_rate" if not col.endswith("_rate") else col
         if rate_col != col:
-            result[rate_col] = result[col] / result[pop_col].replace(0, np.nan)
+            denom = result[f"{col}{COVERED_POP_SUFFIX}"].replace(0, np.nan)
+            result[rate_col] = result[col] / denom
 
     return result
 

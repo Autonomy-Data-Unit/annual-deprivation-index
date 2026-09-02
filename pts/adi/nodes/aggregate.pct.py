@@ -17,6 +17,19 @@
 # 3. Convert all domains from LSOA 2011 to LSOA 2021 via crosswalk
 # 4. Aggregate to four geography levels: LSOA, LAD, Region, England
 # 5. Save final outputs to store/outputs/{run_name}/
+#
+# Every output file carries TWO populations, and they answer different questions:
+#
+# * `pop` -- the ONS mid-year estimate for the whole area. One meaning in every
+#   domain, level and year, so the three domains agree on how many people live
+#   somewhere, and the figure reconciles to Nomis NM_2014_1.
+# * `{col}_pop` -- the population behind `{col}` specifically, and the denominator
+#   `{col}_rate` divides by. Equal to `pop` where the whole area was measured,
+#   smaller where it was not (Greater Manchester's street crime from 2019, a QOF
+#   disease group whose practices were not published), NaN where nothing was.
+#
+# `{col}_rate == {col} / {col}_pop` holds exactly at every level, and
+# `{col}_pop / pop` is the share of the area the number rests on.
 
 # %%
 #|default_exp aggregate
@@ -54,9 +67,11 @@ import numpy as np
 import pandas as pd
 
 from adi.utils.geo import (
+    COVERED_POP_SUFFIX,
     build_crosswalk,
     apply_crosswalk,
     aggregate_to_geography,
+    covered_population,
     load_lsoa21_population,
 )
 
@@ -120,6 +135,34 @@ def _crosswalk_for(pop_year):
 #|export
 lsoa_to_lad = pd.read_csv(const.geo_lookups_path / "lsoa21_to_lad25.csv")
 lad_to_rgn = pd.read_csv(const.geo_lookups_path / "lad25_to_rgn25.csv")
+
+# One LSOA -> geography lookup per published level, so LSOA, LAD, Region and
+# England all go through `aggregate_to_geography` and cannot drift apart. England
+# used to sum the LSOA frame directly while LAD and Region inner-joined a lookup,
+# so an LSOA missing from `lsoa21_to_lad25` would have silently made England
+# larger than the sum of its LADs; `_check_lsoa_coverage` now refuses that
+# outright instead.
+lsoa_to_rgn = (
+    lsoa_to_lad[["LSOA21CD", "LAD25CD"]].drop_duplicates()
+    .merge(lad_to_rgn[["LAD25CD", "RGN25CD", "RGN25NM"]].drop_duplicates(), on="LAD25CD")
+    [["LSOA21CD", "RGN25CD", "RGN25NM"]]
+)
+lsoa_to_eng = (
+    lsoa_to_lad[["LSOA21CD"]].drop_duplicates()
+    .assign(area_code="E92000001", area_name="England")
+)
+
+
+def _check_lsoa_coverage(stem, lsoa21_df):
+    """Every published LSOA must roll up, or the levels stop reconciling."""
+    for name, lookup in (("LAD", lsoa_to_lad), ("region", lsoa_to_rgn), ("England", lsoa_to_eng)):
+        orphans = sorted(set(lsoa21_df["LSOA21CD"]) - set(lookup["LSOA21CD"]))
+        if orphans:
+            raise ValueError(
+                f"{stem}: {len(orphans)} LSOA 2021 areas have no {name} in the geographic "
+                f"lookups (e.g. {orphans[:5]}). Refusing to publish a national total that "
+                f"disagrees with the sum of its parts."
+            )
 
 # %% [markdown]
 # ## Process each domain and year
@@ -220,60 +263,46 @@ def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_patter
             lsoa21_df, count_cols, pop_col, pop_year, derived_counts,
         )
 
+        _check_lsoa_coverage(stem, lsoa21_df)
+
         # --- LSOA level ---
         lsoa_dir = output_dir / "lsoa" / domain_name
         lsoa_dir.mkdir(parents=True, exist_ok=True)
 
-        # Add LSOA names and recompute rates
+        # Add LSOA names, then the covered population and the rate it denominates.
+        # An LSOA is measured or it is not, so `{col}_pop` here is `pop` or NaN --
+        # carried anyway so that one expression, `{col} / {col}_pop`, reproduces
+        # the rate at every level rather than only above LSOA.
         lsoa_names = lsoa_to_lad[["LSOA21CD", "LSOA21NM"]].drop_duplicates()
         lsoa_out = lsoa_names.merge(lsoa21_df, on="LSOA21CD", how="right")
+        lsoa_out = pd.concat(
+            [lsoa_out, covered_population(lsoa_out, count_cols, pop_col)], axis=1,
+        )
         for col in count_cols:
-            lsoa_out[f"{col}_rate"] = lsoa_out[col] / lsoa_out[pop_col].replace(0, np.nan)
+            denom = lsoa_out[f"{col}{COVERED_POP_SUFFIX}"].replace(0, np.nan)
+            lsoa_out[f"{col}_rate"] = lsoa_out[col] / denom
         lsoa_out.to_csv(lsoa_dir / f"{stem}.csv", index=False)
 
-        # --- LAD level ---
-        lad_dir = output_dir / "lad" / domain_name
-        lad_dir.mkdir(parents=True, exist_ok=True)
-        lad_df = aggregate_to_geography(
-            lsoa21_df, lsoa_to_lad, "LSOA21CD", "LAD25CD", "LAD25NM",
-            count_cols, pop_col,
-        )
-        lad_df.to_csv(lad_dir / f"{stem}.csv", index=False)
+        # --- LAD, Region and England ---
+        # All three are the same operation over a different lookup, so they share
+        # one code path and cannot disagree about what they summed.
+        levels = {}
+        for level, lookup, code_col, name_col in (
+            ("lad", lsoa_to_lad, "LAD25CD", "LAD25NM"),
+            ("region", lsoa_to_rgn, "RGN25CD", "RGN25NM"),
+            ("england", lsoa_to_eng, "area_code", "area_name"),
+        ):
+            level_dir = output_dir / level / domain_name
+            level_dir.mkdir(parents=True, exist_ok=True)
+            level_df = aggregate_to_geography(
+                lsoa21_df, lookup, "LSOA21CD", code_col, name_col,
+                count_cols, pop_col,
+            )
+            level_df.to_csv(level_dir / f"{stem}.csv", index=False)
+            levels[level] = level_df
 
-        # --- Region level ---
-        rgn_dir = output_dir / "region" / domain_name
-        rgn_dir.mkdir(parents=True, exist_ok=True)
-        # Need to go via LAD: merge LSOA->LAD, then LAD->Region
-        lsoa_with_lad = lsoa21_df.merge(
-            lsoa_to_lad[["LSOA21CD", "LAD25CD"]].drop_duplicates(),
-            on="LSOA21CD", how="inner",
-        )
-        lsoa_with_rgn = lsoa_with_lad.merge(
-            lad_to_rgn[["LAD25CD", "RGN25CD", "RGN25NM"]].drop_duplicates(),
-            on="LAD25CD", how="inner",
-        )
-        # min_count=1: an all-NaN column is "not collected", not zero.
-        rgn_df = (
-            lsoa_with_rgn.groupby(["RGN25CD", "RGN25NM"])[count_cols + [pop_col]]
-            .sum(min_count=1)
-            .reset_index()
-        )
-        for col in count_cols:
-            rgn_df[f"{col}_rate"] = rgn_df[col] / rgn_df[pop_col].replace(0, np.nan)
-        rgn_df.to_csv(rgn_dir / f"{stem}.csv", index=False)
-
-        # --- England level ---
-        eng_dir = output_dir / "england" / domain_name
-        eng_dir.mkdir(parents=True, exist_ok=True)
-        eng_row = lsoa21_df[count_cols + [pop_col]].sum(min_count=1).to_frame().T
-        eng_row.insert(0, "area_code", "E92000001")
-        eng_row.insert(1, "area_name", "England")
-        for col in count_cols:
-            eng_row[f"{col}_rate"] = eng_row[col] / eng_row[pop_col].replace(0, np.nan)
-        eng_row.to_csv(eng_dir / f"{stem}.csv", index=False)
-
-        print(f"  {domain_name}/{stem}: LSOA={len(lsoa_out)}, LAD={len(lad_df)}, "
-              f"Region={len(rgn_df)}, pop_year={pop_year}")
+        print(f"  {domain_name}/{stem}: LSOA={len(lsoa_out)}, LAD={len(levels['lad'])}, "
+              f"Region={len(levels['region'])}, pop_year={pop_year}")
 
 # %% [markdown]
 # ## Claimant counts
