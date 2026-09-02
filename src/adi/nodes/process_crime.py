@@ -20,14 +20,16 @@ async def main(ctx, print, data_ready: dict) -> bool:
 
     print(f"process_crime: years {year_start}-{year_end}")
 
-    # The Home Office comparison scope: 39 English territorial forces plus British
-    # Transport Police. Welsh and Northern Irish files can contain occasional English
-    # geocodes, which the existing pipeline retains, but their reporting completeness
-    # must not decide whether the England series is publishable.
-    ENGLISH_FORCE_SLUGS = frozenset({
+    # The resident-area measure covers the 39 English territorial forces. British
+    # Transport Police is excluded consistently: it is a national network force with
+    # no exclusive LAD footprint, so its missing months must neither erase otherwise
+    # complete territorial-force data nor silently change the measure between years.
+    # Welsh and Northern Irish files can contain occasional English geocodes, which the
+    # existing pipeline retains, but their reporting completeness must not decide
+    # whether the England series is publishable.
+    ENGLISH_TERRITORIAL_FORCE_SLUGS = frozenset({
         "avon-and-somerset",
         "bedfordshire",
-        "btp",
         "cambridgeshire",
         "cheshire",
         "city-of-london",
@@ -66,7 +68,7 @@ async def main(ctx, print, data_ready: dict) -> bool:
         "west-yorkshire",
         "wiltshire",
     })
-    NETWORK_FORCE_SLUGS = frozenset({"btp"})
+    EXCLUDED_NETWORK_FORCE_SLUGS = frozenset({"btp"})
     def _build_lsoa21_to_lsoa11_remap() -> dict:
         """Map LSOA 2021 codes that don't exist in the LSOA 2011 universe back to their
         LSOA 2011 parent.
@@ -221,22 +223,26 @@ async def main(ctx, print, data_ready: dict) -> bool:
         raise FileNotFoundError(f"No population file found for {year} or 2020 in {pop_dir}")
 
 
-    def _load_street_data_for_year(year: int) -> tuple[pd.DataFrame, dict]:
-        """Load a year and count records in every expected force-month file."""
+    def _load_street_data_for_year(year: int) -> tuple[pd.DataFrame, dict, dict]:
+        """Load a year and count included and excluded force-month records."""
         frames = []
-        records = {force: {} for force in ENGLISH_FORCE_SLUGS}
+        records = {force: {} for force in ENGLISH_TERRITORIAL_FORCE_SLUGS}
+        excluded_records = {force: {} for force in EXCLUDED_NETWORK_FORCE_SLUGS}
         year_files = sorted(
             (key, path) for key, path in _street_file_index.items() if key[0] == year
         )
         for (_, force, month), csv_path in year_files:
             df = pd.read_csv(csv_path, usecols=["LSOA code", "LSOA name", "Crime type"])
+            if force in excluded_records:
+                excluded_records[force][month] = len(df)
+                continue
             frames.append(df)
             if force in records:
                 records[force][month] = len(df)
         if not frames:
             empty = pd.DataFrame(columns=["LSOA code", "LSOA name", "Crime type"])
-            return empty, records
-        return pd.concat(frames, ignore_index=True), records
+            return empty, records, excluded_records
+        return pd.concat(frames, ignore_index=True), records, excluded_records
 
 
     def _incomplete_force_coverage(year: int, records: dict) -> list[dict]:
@@ -248,7 +254,7 @@ async def main(ctx, print, data_ready: dict) -> bool:
         during COVID-19), so a numeric threshold would turn measurements into gaps.
         """
         failures = []
-        for force in sorted(ENGLISH_FORCE_SLUGS):
+        for force in sorted(ENGLISH_TERRITORIAL_FORCE_SLUGS):
             present = {
                 month
                 for month in range(1, 13)
@@ -273,14 +279,25 @@ async def main(ctx, print, data_ready: dict) -> bool:
             continue
 
         print(f"  {year}: loading street crime data...")
-        df, force_records = _load_street_data_for_year(year)
+        df, force_records, excluded_force_records = _load_street_data_for_year(year)
         if df.empty:
             print(f"  {year}: no crime data found, skipping")
             continue
 
+        for force, monthly_records in sorted(excluded_force_records.items()):
+            present = {
+                month for month in range(1, 13)
+                if (year, force, month) in _street_file_index
+            }
+            nonempty = {month for month, count in monthly_records.items() if count > 0}
+            print(
+                f"  {year}: EXCLUDED network force {force}: "
+                f"files={len(present)}/12, nonempty={len(nonempty)}/12, "
+                f"records={sum(monthly_records.values()):,}"
+            )
+
         incomplete_forces = _incomplete_force_coverage(year, force_records)
         unavailable_lsoas = set()
-        all_england_unavailable = False
         for coverage in incomplete_forces:
             force = coverage["force"]
             missing = ",".join(f"{month:02d}" for month in sorted(coverage["missing"])) or "none"
@@ -290,14 +307,6 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 f"files={len(coverage['present'])}/12, nonempty={len(coverage['nonempty'])}/12, "
                 f"records={coverage['records']:,}, missing=[{missing}], empty=[{empty}]"
             )
-            if force in NETWORK_FORCE_SLUGS:
-                # BTP is not a territorial force: its incidents occur throughout England.
-                # A partial BTP year makes the combined all-force measure incomplete
-                # nationally, not just in the LSOAs present in the surviving months.
-                all_england_unavailable = True
-                print(f"  {year}: {force} has national coverage; all English LSOAs will be unavailable")
-                continue
-
             force_lads, reference_year = _territorial_force_lads(force, year)
             force_lsoas = set().union(*(_lad_to_lsoa11s[lad] for lad in force_lads))
             unavailable_lsoas.update(force_lsoas)
@@ -344,17 +353,14 @@ async def main(ctx, print, data_ready: dict) -> bool:
         pop = pop[~pop["LSOA11CD"].str.startswith("W")]
         result = pop.merge(pivot, on="LSOA11CD", how="left")
 
-        # Fill NaN crime counts with 0 only where every expected force-year was
+        # Fill NaN crime counts with 0 only where every expected territorial force-year was
         # complete. A missing force-month means the annual total was not observed;
         # it is not evidence that zero incidents occurred.
         crime_type_cols = [c for c in result.columns if c not in ("LSOA11CD", "LSOA11NM", "pop")]
         for col in crime_type_cols:
             result[col] = result[col].fillna(0)
 
-        if all_england_unavailable:
-            unavailable = result["LSOA11CD"].str.startswith("E")
-        else:
-            unavailable = result["LSOA11CD"].isin(unavailable_lsoas)
+        unavailable = result["LSOA11CD"].isin(unavailable_lsoas)
         result.loc[unavailable, crime_type_cols] = np.nan
 
         for col in crime_type_cols:
