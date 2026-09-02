@@ -10,7 +10,6 @@ async def main(ctx, print, data_ready: dict) -> bool:
     
     import numpy as np
     import pandas as pd
-    from scipy import stats
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]
     run_name = ctx.vars["run_name"]
@@ -156,6 +155,29 @@ async def main(ctx, print, data_ready: dict) -> bool:
     MIN_QOF_COVERAGE = 0.80
     
     
+    def _reject_impossible_rates(df: pd.DataFrame, rate_cols: list[str]) -> int:
+        """Replace any prevalence rate that is not a possible proportion with NaN, in place.
+    
+        A prevalence rate is a share of a population: it lives in [0, 1] or it is not a
+        measurement of anything. This is the last gate before the node writes, so nothing
+        process_health emits can be outside that range whatever produced it.
+    
+        Rejected to NaN, never clamped. Clamping would invent a measurement -- and clamping
+        to 0.0 in particular would recreate the exact defect this node was rewritten to
+        remove, publishing "we could not measure this" as "we measured nil". NaN is the only
+        honest representation, and the aggregate node carries a per-count covered population
+        so a NaN LSOA no longer drags its LAD's rate down.
+        """
+        n = 0
+        for col in rate_cols:
+            v = pd.to_numeric(df[col], errors="coerce")
+            bad = v.notna() & (~np.isfinite(v) | (v < 0) | (v > 1))
+            if bad.any():
+                n += int(bad.sum())
+                df.loc[bad, col] = np.nan
+        return n
+    
+    
     def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame) -> pd.DataFrame:
         """Estimate LSOA-level prevalence from QOF + GP-LSOA registration data.
     
@@ -298,9 +320,17 @@ async def main(ctx, print, data_ready: dict) -> bool:
         pop = _load_population(qof_end)
         result = pop.merge(result, on="LSOA11CD", how="left")
     
+        # Nothing leaves this node outside [0, 1]. A weighted average of practice rates can
+        # exceed 1 if QOF publishes a register larger than the practice's list size, which it
+        # does (23 such practice-disease cells in 2015-16, the worst a register of 9 against
+        # a list size of 1). Gate before the counts are derived, so the count agrees with the
+        # rate, and before the interpolation below reads these files, so a rejected value
+        # cannot anchor an interpolation.
+        disease_cols_cur = [c for c in result.columns if c.endswith("_prevalence_rate")]
+        n_rejected = _reject_impossible_rates(result, disease_cols_cur)
+    
         # Compute afflicted counts from prevalence * ONS population. NaN prevalence gives a
         # NaN count, which is what "not measured here" has to look like downstream.
-        disease_cols_cur = [c for c in result.columns if c.endswith("_prevalence_rate")]
         for rate_col in disease_cols_cur:
             afflicted_col = rate_col.replace("_prevalence_rate", "_afflicted")
             result[afflicted_col] = result[rate_col] * result["pop"]
@@ -311,22 +341,56 @@ async def main(ctx, print, data_ready: dict) -> bool:
         n_thin = int((cov < MIN_QOF_COVERAGE).sum() + cov.isna().sum())
         print(f"  QOF {year_key}: {len(result)} LSOAs, {len(disease_cols)} disease subdomains, "
               f"QOF coverage mean {cov.mean():.5f} min {cov.min():.5f}, "
-              f"{n_thin} LSOAs below the {MIN_QOF_COVERAGE:.0%} floor (left missing)")
+              f"{n_thin} LSOAs below the {MIN_QOF_COVERAGE:.0%} floor (left missing), "
+              f"{n_rejected} rates rejected as outside [0,1]")
         processed_years.append(year_key)
     def _interpolate_series(values: list) -> list:
-        """Interpolate missing values (NaN) in a time series.
+        """Fill short INTERIOR gaps in a per-LSOA time series by linear interpolation.
     
-        - Interior gaps (max 2 consecutive): linear interpolation
-        - Leading gaps: extrapolate from first valid segment via linear regression
-        - Trailing gaps: extrapolate from last valid segment via linear regression
-        - Gaps > 2 consecutive: leave as NaN
+        - Interior gaps of at most 2 consecutive years: linear interpolation between the
+          observations either side.
+        - Leading and trailing gaps: left NaN.
+        - Gaps longer than 2 years: left NaN.
+    
+        An interior gap is bounded by a real observation on each side, so the filled value
+        cannot leave the range those two observations span. It is a guess, but a guess
+        between two measurements.
+    
+        The ends used to be extrapolated by fitting a line to the nearest valid segment and
+        projecting it outward. That was removed, for three reasons:
+    
+        1. It is unbounded on the open side, and it published negative prevalence rates.
+           Isles of Scilly DEP ran 0.035621 (2022-23) -> 0.005425 (2023-24) -> -0.024771
+           (2024-25), which reached the published LAD download bundle; 13 LSOAs had negative
+           OST in 2013-14 the same way.
+        2. Both failures came from a degenerate anchor. `max(2, gap_len + 1)` takes exactly
+           two points for the common one-year gap, so the "regression" has zero residual
+           degrees of freedom -- it is not a fit, it is the last year-on-year step, doubled.
+           Where that step is a collapse rather than a trend the line runs through zero, and
+           here it collapsed for a reason the node cannot see: DEP 2023-24 and OST 2014-15
+           are the two QOF basis changes build_data.py corrects downstream, and the Isles of
+           Scilly had 2.8% QOF coverage in 2024-25 on top.
+        3. Measured, it does not work. Holding out the end value of 80,000 fully observed
+           (LSOA, disease) series and predicting it, the linear extrapolator is beaten by
+           simply carrying the nearest observed value forward -- on the median (trailing
+           0.0376 vs 0.0353 relative error), badly on the tail (p90 0.217 vs 0.146), and it
+           wins outright in only 44.5% of cases. It also goes negative in 5.0% of them.
+           An extrapolator that loses to persistence has no claim to being a model.
+    
+        Persistence was considered as the replacement and rejected: it is safer and more
+        accurate than the regression, but it cannot survive a degenerate anchor either. For
+        Isles of Scilly DEP it would carry the anomalous 0.005425 into 2024-25 and publish
+        the LAD at a twentieth of the national rate -- in range, and still wrong. When the
+        only anchor available is itself suspect, the honest answer is that we do not know.
+    
+        Reproduce the hold-out table with
+          _dev/2026-09-02-stress-test/health-vs-qof/fix2_01_extrap_test.py
         """
         arr = np.array(values, dtype=float)
         n = len(arr)
         if n == 0 or not np.any(np.isnan(arr)):
             return values
     
-        # Find runs of NaN
         is_nan = np.isnan(arr)
         result = arr.copy()
     
@@ -345,35 +409,15 @@ async def main(ctx, print, data_ready: dict) -> bool:
     
         for start, end in segments:
             gap_len = end - start
-            if gap_len > 2:
-                continue  # Too long to interpolate
+            if gap_len > 2 or start == 0 or end == n:
+                continue  # too long, or open-ended: no two observations to sit between
     
-            if start == 0:
-                # Leading gap: extrapolate backward from next valid segment
-                valid_after = result[end:end + max(2, gap_len + 1)]
-                valid_after = valid_after[~np.isnan(valid_after)]
-                if len(valid_after) >= 2:
-                    x = np.arange(len(valid_after))
-                    slope, intercept, _, _, _ = stats.linregress(x, valid_after)
-                    for k in range(gap_len):
-                        result[start + k] = slope * (k - gap_len) + intercept
-            elif end == n:
-                # Trailing gap: extrapolate forward from previous valid segment
-                valid_before = result[max(0, start - max(2, gap_len + 1)):start]
-                valid_before = valid_before[~np.isnan(valid_before)]
-                if len(valid_before) >= 2:
-                    x = np.arange(len(valid_before))
-                    slope, intercept, _, _, _ = stats.linregress(x, valid_before)
-                    for k in range(gap_len):
-                        result[start + k] = slope * (len(valid_before) + k) + intercept
-            else:
-                # Interior gap: linear interpolation
-                v_before = result[start - 1]
-                v_after = result[end]
-                if not np.isnan(v_before) and not np.isnan(v_after):
-                    for k in range(gap_len):
-                        frac = (k + 1) / (gap_len + 1)
-                        result[start + k] = v_before + frac * (v_after - v_before)
+            v_before = result[start - 1]
+            v_after = result[end]
+            if not np.isnan(v_before) and not np.isnan(v_after):
+                for k in range(gap_len):
+                    frac = (k + 1) / (gap_len + 1)
+                    result[start + k] = v_before + frac * (v_after - v_before)
     
         return result.tolist()
     if len(processed_years) > 1:
@@ -440,12 +484,24 @@ async def main(ctx, print, data_ready: dict) -> bool:
                 if afflicted_col in df.columns and "pop" in df.columns:
                     df[afflicted_col] = df[col] * df["pop"]
     
-        # Save interpolated data
+        # Save interpolated data, re-gating on the way out. Interior interpolation is
+        # bounded by its two anchors and so cannot produce an impossible rate from possible
+        # ones, but the guarantee is worth making structural rather than argued: this is the
+        # node's last write.
+        n_rejected_interp = 0
         for yk in sorted_years:
+            df = all_health[yk]
+            rate_cols = [c for c in df.columns if c.endswith("_prevalence_rate")]
+            n_rejected_interp += _reject_impossible_rates(df, rate_cols)
+            for rate_col in rate_cols:
+                afflicted_col = rate_col.replace("_prevalence_rate", "_afflicted")
+                if afflicted_col in df.columns and "pop" in df.columns:
+                    df[afflicted_col] = df[rate_col] * df["pop"]
             out_path = output_dir / f"health_{yk}.csv"
-            all_health[yk].reset_index().to_csv(out_path, index=False)
+            df.reset_index().to_csv(out_path, index=False)
     
-        print(f"  interpolated {n_interpolated} values across {len(sorted_years)} years")
+        print(f"  interpolated {n_interpolated} values across {len(sorted_years)} years; "
+              f"{n_rejected_interp} rates rejected as outside [0,1] after interpolation")
     
     print(f"process_health: done, output at {const.rel(output_dir)}")
     return True
