@@ -87,13 +87,39 @@ async def main(ctx, print, data_ready: dict) -> bool:
                     errors="coerce",
                 )
     
-        # Filter by list_type if needed (Era 4: multiple PATIENT_LIST_TYPE per practice)
-        list_type_filter = schema.get("list_type_filter")
-        if list_type_filter and "PATIENT_LIST_TYPE" in df.columns:
-            # Get list_pop from TOTAL rows only
-            pop_df = df[df["PATIENT_LIST_TYPE"] == list_type_filter][[practice_col, list_pop_col]].drop_duplicates(subset=practice_col)
+        # Choose the practice's list size deterministically.
+        #
+        # QOF reports a different list size per disease group, because 9 of the 21 registers
+        # are age-restricted (AST 6+, RA 16+, DM 17+, CKD/DEP/EP/NDH/OB 18+, OST 50+). This
+        # node wants the ALL-AGES list for every disease, so that `register / list_pop` scaled
+        # by the LSOA's all-ages ONS population estimates the number of residents on the
+        # register. (That makes the published rate a share of the whole population, NOT QOF's
+        # own published prevalence for those 9 conditions -- see #42.)
+        #
+        # It used to take whichever row happened to come first per practice
+        # (`drop_duplicates`), which lands on the all-ages list only because `AF` -- a TOTAL
+        # group -- sorts first in every file NHS Digital has published so far. That is row
+        # order deciding the denominator for all 21 conditions: a reissue in a different order
+        # would silently move six years of the series with no error and no diff. Select it
+        # explicitly instead:
+        #
+        #   * where the source carries PATIENT_LIST_TYPE (2015-16 onward), take the rows of
+        #     the all-ages type;
+        #   * where it does not (2014-15), take the largest list size the practice reports,
+        #     which is the all-ages one because every other type is an age-restricted subset.
+        #
+        # Both rules are order-independent, and both reproduce today's values exactly.
+        list_type = schema.get("list_type_filter", "TOTAL")
+        if "PATIENT_LIST_TYPE" in df.columns:
+            rows = df[df["PATIENT_LIST_TYPE"] == list_type]
+            if rows.empty:
+                raise ValueError(
+                    f"QOF {year_key}: no rows with PATIENT_LIST_TYPE == {list_type!r}; "
+                    f"cannot identify the all-ages practice list size."
+                )
         else:
-            pop_df = df[[practice_col, list_pop_col]].drop_duplicates(subset=practice_col)
+            rows = df
+        pop_df = rows.groupby(practice_col, as_index=False)[list_pop_col].max()
     
         # Pivot: one row per practice, one column per disease group.
         #
@@ -122,6 +148,26 @@ async def main(ctx, print, data_ready: dict) -> bool:
             pivot.rename(columns={practice_col: "practice_code"}),
             on="practice_code", how="inner",
         )
+    
+        # A register cannot hold more people than the list it is drawn from. Where QOF says
+        # it does, the pair is arithmetically impossible and is dropped to NaN -- the practice
+        # then falls out of that disease's weights and the rest are renormalised, exactly as
+        # for a practice QOF never published. 23 such cells exist in 2015-16, the worst a
+        # register of 9 against a list size of 1 (practice J84602, an implied rate of 900%).
+        # They currently carry little LSOA weight, but nothing guaranteed that, and a
+        # weighted average of practice rates is bounded by the worst rate that enters it.
+        #
+        # This is arithmetic, not a plausibility judgement. It does NOT catch a register that
+        # is merely implausible for the disease -- practice C82028's 3,636 epilepsy patients
+        # on a list of 6,956 (52%) is impossible clinically but fits inside its list, so it
+        # survives here. See the note on the sanity of high rates in `_estimate_lsoa_prevalence`.
+        disease_cols = [c for c in result.columns if c not in ("practice_code", "list_pop")]
+        over = result[disease_cols].gt(result["list_pop"], axis=0)
+        n_over = int(over.to_numpy().sum())
+        if n_over:
+            result[disease_cols] = result[disease_cols].mask(over)
+            print(f"  QOF {year_key}: rejected {n_over} practice-disease registers larger "
+                  f"than the practice list size")
     
         return result
     # Minimum share of an LSOA's GP registrations that must sit at practices QOF actually
@@ -178,7 +224,8 @@ async def main(ctx, print, data_ready: dict) -> bool:
         return n
     
     
-    def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame) -> pd.DataFrame:
+    def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame,
+                                  pop_by_lsoa: pd.Series) -> pd.DataFrame:
         """Estimate LSOA-level prevalence from QOF + GP-LSOA registration data.
     
         For each LSOA i and disease d, over the practices k for which QOF published both a
@@ -202,8 +249,23 @@ async def main(ctx, print, data_ready: dict) -> bool:
         representative of the uncovered ones. `coverage_id` is how much of the LSOA it rested
         on, and a disease below MIN_QOF_COVERAGE is returned NaN rather than published.
     
+        There is deliberately no upper PLAUSIBILITY bound here, only the arithmetic one in
+        `_normalise_qof` and the [0, 1] gate on the result. A weighted average cannot exceed
+        the worst practice rate that enters it, so an implausibly high LSOA value means an
+        implausible practice register -- and practice registers cannot be screened
+        statistically: measured across 254 disease-years, the ratio of the largest practice
+        rate to the national median for that disease-year has a median of 13.7 and reaches
+        6,964, because tiny-list practices make the ratio meaningless. The known-bad records
+        sit inside that noise (practice C82028's 52% epilepsy is 84x its national median,
+        while other practices legitimately reach 1,441x). No single fence separates them, so
+        a bound here would have to be a per-disease clinical ceiling -- a judgement someone
+        has to defend condition by condition. That judgement already exists downstream, in
+        build_data.py's HEALTH_SPIKE_BOUNDS, where a temporal reversal test is available to
+        support it. Adding a second, differently-tuned copy upstream would give the project
+        two sources of truth for the same question. See #66.
+    
         Returns one row per LSOA present in `gp_lsoa`, with `{disease}_prevalence_rate`
-        columns and a `qof_coverage` column.
+        columns, a `qof_coverage` column and a `registration_coverage` column.
         """
         disease_cols = [c for c in qof.columns if c not in ("practice_code", "list_pop")]
     
@@ -240,6 +302,17 @@ async def main(ctx, print, data_ready: dict) -> bool:
             rate = sums[f"_num_{disease}"] / den.replace(0, np.nan)
             result[f"{disease}_prevalence_rate"] = rate.where(coverage >= MIN_QOF_COVERAGE)
         result["qof_coverage"] = sums["_den_any"] / totals
+        # Registrations the LSOA has at all, per resident. Distinct from `qof_coverage`, which
+        # asks what share of those registrations QOF published: an LSOA can have complete QOF
+        # coverage of very few registrations. Five Forest of Dean LSOAs sit at 0.5%-9% here in
+        # every year, because their residents mostly register with Welsh practices and NHS
+        # Digital's registration file is England-only. Measured against the same temporal
+        # control used to set MIN_QOF_COVERAGE, thin registration barely degrades the estimate
+        # -- median |log error| 0.036 and p90 0.154 below 0.1, against 0.019 and 0.084 at the
+        # normal ratio of ~1.05, versus 0.223 and 0.769 for thin QOF coverage -- because the
+        # few residents who do register use the same practices as their neighbours. So there
+        # is deliberately NO floor on this: it is reported, not enforced. See #62.
+        result["registration_coverage"] = totals / pop_by_lsoa.reindex(sums.index)
     
         result.index.name = "LSOA11CD"
         return result.reset_index()
@@ -306,7 +379,8 @@ async def main(ctx, print, data_ready: dict) -> bool:
         print(f"  QOF {year_key}: {len(qof)} practices in QOF, {gp_lsoa['practice_code'].nunique()} in GP-LSOA")
     
         # Estimate LSOA prevalence
-        result = _estimate_lsoa_prevalence(qof, gp_lsoa)
+        pop = _load_population(qof_end)
+        result = _estimate_lsoa_prevalence(qof, gp_lsoa, pop.set_index("LSOA11CD")["pop"])
     
         # Merge with population and compute afflicted counts.
         #
@@ -317,7 +391,6 @@ async def main(ctx, print, data_ready: dict) -> bool:
         # published health `pop` contradict the employment `pop` for the same area and year
         # -- Buckinghamshire 2018 was published at 478,425 against 541,983. Such an LSOA now
         # emits an all-NaN prevalence row against its true population.
-        pop = _load_population(qof_end)
         result = pop.merge(result, on="LSOA11CD", how="left")
     
         # Nothing leaves this node outside [0, 1]. A weighted average of practice rates can
@@ -342,7 +415,9 @@ async def main(ctx, print, data_ready: dict) -> bool:
         print(f"  QOF {year_key}: {len(result)} LSOAs, {len(disease_cols)} disease subdomains, "
               f"QOF coverage mean {cov.mean():.5f} min {cov.min():.5f}, "
               f"{n_thin} LSOAs below the {MIN_QOF_COVERAGE:.0%} floor (left missing), "
-              f"{n_rejected} rates rejected as outside [0,1]")
+              f"{n_rejected} rates rejected as outside [0,1], "
+              f"registration coverage min {result['registration_coverage'].min():.4f} "
+              f"({int((result['registration_coverage'] < 0.5).sum())} LSOAs below 0.5, reported not enforced)")
         processed_years.append(year_key)
     def _interpolate_series(values: list) -> list:
         """Fill short INTERIOR gaps in a per-LSOA time series by linear interpolation.
