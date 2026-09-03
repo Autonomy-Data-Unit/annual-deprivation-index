@@ -66,6 +66,48 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from adi.utils.nomis import QOF_AGE_BANDS
+
+#: Column suffixes. The all-ages rate keeps `_prevalence_rate` and its exact current
+#: definition; the age-restricted rate is a SECOND column beside it. `_qof_` because the
+#: one-line justification is "this is the quantity QOF publishes". Deliberately not
+#: `age_standardised`: this removes the ineligible population from the denominator, it
+#: does not remove age structure from the comparison, and the other name would licence an
+#: inference it does not support.
+RATE_SUFFIX = "_prevalence_rate"
+QOF_RATE_SUFFIX = "_qof_prevalence_rate"
+
+
+def _rate_cols(df) -> list[str]:
+    """The all-ages rate columns, and only those.
+
+    `{CODE}_qof_prevalence_rate` also ends in `_prevalence_rate`, so a bare `endswith`
+    test would sweep the new column into the count derivation and hand it the all-ages
+    population -- a count against the wrong denominator, which `aggregate` would then
+    publish. Every place that used to test the suffix directly calls this instead.
+    """
+    return [c for c in df.columns
+            if c.endswith(RATE_SUFFIX) and not c.endswith(QOF_RATE_SUFFIX)]
+
+
+def _qof_rate_cols(df) -> list[str]:
+    """The age-restricted rate columns."""
+    return [c for c in df.columns if c.endswith(QOF_RATE_SUFFIX)]
+
+
+def _afflicted_col(rate_col: str) -> str | None:
+    """The count column derived from a rate column, or None if there is none.
+
+    Only the all-ages rate has a count here. The age-restricted rate's count is
+    `rate x the resident population of that condition's QOF age band`, and this node
+    holds no band populations -- deriving it against `pop` would silently produce a count
+    of the whole population at an over-18s rate. So the age-restricted metric leaves this
+    node as a rate alone, and the aggregate node completes the triple.
+    """
+    if rate_col.endswith(QOF_RATE_SUFFIX):
+        return None
+    return rate_col[: -len(RATE_SUFFIX)] + "_afflicted"
+
 # %%
 #|export
 year_start = ctx.vars["year_start"]
@@ -93,21 +135,27 @@ with open(const.qof_schemas_path, "rb") as f:
     qof_schemas = tomllib.load(f)["years"]
 
 
-def _normalise_qof(year_key: str) -> pd.DataFrame | None:
-    """Load and normalise QOF data for a given year key (e.g. '2021_22')."""
+def _normalise_qof(year_key: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """Load and normalise QOF data for a given year key (e.g. '2021_22').
+
+    Returns `(registers, age_denominators)`. `registers` carries one row per practice
+    with the all-ages `list_pop` and a column of register sizes per disease -- the
+    existing frame, unchanged. `age_denominators` carries the age-restricted list size
+    QOF measures the affected registers against, or None where the source has none.
+    """
     schema = qof_schemas.get(year_key)
     if not schema:
-        return None
+        return None, None
 
     fmt = schema.get("format", "csv")
     if fmt == "excel":
         # Pre-2013 Excel formats not yet supported
-        return None
+        return None, None
 
     # Find the raw file
     year_dir = qof_raw_dir / year_key
     if not year_dir.exists():
-        return None
+        return None, None
 
     file_pattern = schema.get("file_pattern", "")
 
@@ -128,7 +176,7 @@ def _normalise_qof(year_key: str) -> pd.DataFrame | None:
         if not candidates:
             candidates = list(year_dir.rglob("*.csv"))
         if not candidates:
-            return None
+            return None, None
         raw_path = candidates[0]
     encoding = schema.get("encoding", "utf-8")
     df = pd.read_csv(raw_path, encoding=encoding)
@@ -236,7 +284,63 @@ def _normalise_qof(year_key: str) -> pd.DataFrame | None:
         print(f"  QOF {year_key}: rejected {n_over} practice-disease registers larger "
               f"than the practice list size")
 
-    return result
+    return result, _qof_age_denominators(df, schema, year_key,
+                                         practice_col, list_pop_col, disease_col)
+
+
+def _qof_age_denominators(df, schema, year_key, practice_col, list_pop_col, disease_col):
+    """The age-restricted list size QOF measures each register against, per practice.
+
+    Returned as a wide frame indexed like the register frame, carrying a column only for
+    the diseases QOF denominates against an age-restricted list. Returns None where the
+    source has none. The value is simply that (practice, disease) row's own list size:
+    QOF already publishes the right denominator on the row, it just does not always say
+    which band it is.
+
+    Which band applies comes from one of two places, never from inference at runtime:
+
+      * `PATIENT_LIST_TYPE` on the row, where the source has that column (2015-16 on);
+      * the pinned `[years.<y>.list_types]` table, for 2014-15, which publishes correct
+        per-group denominators with no label.
+
+    A band is used only if `QOF_AGE_BANDS` knows it, because the rate is one third of a
+    metric and the other two thirds need that band's resident population. That currently
+    drops CVDPP (30_74), which QOF withdrew after 2019-20 and which is dropped before
+    publication in any case.
+    """
+    if not schema.get("qof_age_denominators", True):
+        return None                       # 2013-14: one all-ages list for every group
+
+    if "PATIENT_LIST_TYPE" in df.columns:
+        pairs = (df[[disease_col, "PATIENT_LIST_TYPE"]].drop_duplicates()
+                   .groupby(disease_col)["PATIENT_LIST_TYPE"].agg(set))
+        mixed = {g: v for g, v in pairs.items() if len(v) > 1}
+        if mixed:
+            raise ValueError(
+                f"QOF {year_key}: these groups carry more than one PATIENT_LIST_TYPE "
+                f"({mixed}); the band a register is measured against must be unambiguous."
+            )
+        bands = {g: next(iter(v)) for g, v in pairs.items()}
+    else:
+        bands = dict(schema.get("list_types", {}))
+        if not bands:
+            raise ValueError(
+                f"QOF {year_key}: no PATIENT_LIST_TYPE column and no [years.{year_key}."
+                f"list_types] in config. Either pin the mapping or set "
+                f"qof_age_denominators = false if the source genuinely has none."
+            )
+
+    keep = sorted(g for g, b in bands.items() if b in QOF_AGE_BANDS)
+    if not keep:
+        return None
+
+    denom = df.pivot_table(index=practice_col, columns=disease_col,
+                           values=list_pop_col, aggfunc="max")
+    denom.columns.name = None
+    denom = denom.reindex(columns=keep)
+    denom.index.name = "practice_code"
+    denom.attrs["bands"] = {g: bands[g] for g in keep}
+    return denom.reset_index()
 
 # %% [markdown]
 # ## Prevalence estimation
@@ -301,7 +405,8 @@ def _reject_impossible_rates(df: pd.DataFrame, rate_cols: list[str]) -> int:
 
 
 def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame,
-                              pop_by_lsoa: pd.Series) -> pd.DataFrame:
+                              pop_by_lsoa: pd.Series | None = None,
+                              age_denominators: pd.DataFrame | None = None) -> pd.DataFrame:
     """Estimate LSOA-level prevalence from QOF + GP-LSOA registration data.
 
     For each LSOA i and disease d, over the practices k for which QOF published both a
@@ -340,26 +445,57 @@ def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame,
     support it. Adding a second, differently-tuned copy upstream would give the project
     two sources of truth for the same question. See #66.
 
+    Passing `age_denominators` switches the practice-level denominator from the all-ages
+    list to the age-restricted list QOF measures each affected register against, and the
+    function then returns only `{disease}_qof_prevalence_rate` columns -- no coverage
+    columns, because those describe the LSOA's registrations and are the same whichever
+    denominator the rate uses. Everything else is identical: the same renormalised
+    weights, the same MIN_QOF_COVERAGE floor, the same arithmetic guard. This is the
+    SECOND rate of the additive design in #42; the all-ages rate above keeps its exact
+    definition and its unbroken 2014-2025 series.
+
     Returns one row per LSOA present in `gp_lsoa`, with `{disease}_prevalence_rate`
-    columns, a `qof_coverage` column and a `registration_coverage` column.
+    columns, a `qof_coverage` column and a `registration_coverage` column -- or, in the
+    age-restricted mode, `{disease}_qof_prevalence_rate` columns alone.
     """
-    disease_cols = [c for c in qof.columns if c not in ("practice_code", "list_pop")]
+    per_disease = age_denominators is not None
+    suffix = QOF_RATE_SUFFIX if per_disease else RATE_SUFFIX
+    if per_disease:
+        disease_cols = [c for c in age_denominators.columns if c != "practice_code"]
+        qof = qof[["practice_code", "list_pop"] + disease_cols]
+    else:
+        disease_cols = [c for c in qof.columns if c not in ("practice_code", "list_pop")]
 
     # Every registration the LSOA has, including at practices QOF did not publish.
     # This is the denominator for COVERAGE only, never for the weights.
     lsoa_totals = gp_lsoa.groupby("lsoa_code")["patients"].sum()
 
     merged = gp_lsoa.merge(qof, on="practice_code", how="inner")
+    if per_disease:
+        merged = merged.merge(age_denominators, on="practice_code", how="left",
+                              suffixes=("", "_agedenom"))
     lsoa_code = merged["lsoa_code"]
     patients = merged["patients"].astype(float)
     list_pop = merged["list_pop"].where(merged["list_pop"] > 0)
+
+    def _denominator(disease):
+        """The list this disease's register is measured against, at this practice."""
+        if not per_disease:
+            return list_pop
+        d = merged[f"{disease}_agedenom"]
+        return d.where(d > 0)
 
     # Per disease, the weighted numerator and the weight actually carried. A practice
     # with no register for this disease, or no usable list size, contributes to neither,
     # so it falls out of the weights instead of entering them as a zero rate.
     parts = {}
     for disease in disease_cols:
-        rate_k = merged[disease] / list_pop           # NaN if either is missing
+        den_k = _denominator(disease)
+        # A register cannot exceed the list it is drawn from. _normalise_qof already
+        # enforces that against the all-ages list, which makes this a no-op there; it is
+        # load-bearing against the age-restricted list, which is smaller.
+        reg_k = merged[disease].where(merged[disease] <= den_k)
+        rate_k = reg_k / den_k                        # NaN if either is missing or <= 0
         carried = patients.where(rate_k.notna(), 0.0)
         parts[f"_num_{disease}"] = carried * rate_k.fillna(0.0)
         parts[f"_den_{disease}"] = carried
@@ -376,7 +512,10 @@ def _estimate_lsoa_prevalence(qof: pd.DataFrame, gp_lsoa: pd.DataFrame,
         den = sums[f"_den_{disease}"]
         coverage = den / totals
         rate = sums[f"_num_{disease}"] / den.replace(0, np.nan)
-        result[f"{disease}_prevalence_rate"] = rate.where(coverage >= MIN_QOF_COVERAGE)
+        result[f"{disease}{suffix}"] = rate.where(coverage >= MIN_QOF_COVERAGE)
+    if per_disease:
+        result.index.name = "LSOA11CD"
+        return result.reset_index()
     result["qof_coverage"] = sums["_den_any"] / totals
     # Registrations the LSOA has at all, per resident. Distinct from `qof_coverage`, which
     # asks what share of those registrations QOF published: an LSOA can have complete QOF
@@ -446,7 +585,7 @@ for year_key in all_year_keys:
         continue
 
     # Normalise QOF data
-    qof = _normalise_qof(year_key)
+    qof, age_denoms = _normalise_qof(year_key)
     if qof is None:
         print(f"  QOF {year_key}: no data available, skipping")
         continue
@@ -467,6 +606,20 @@ for year_key in all_year_keys:
     pop = _load_population(qof_end)
     result = _estimate_lsoa_prevalence(qof, gp_lsoa, pop.set_index("LSOA11CD")["pop"])
 
+    # The second, age-restricted rate (#42). Additive: it sits beside the all-ages rate
+    # and changes nothing that already exists. Needs no population data of its own -- it
+    # falls straight out of the QOF file, register over the age-restricted list QOF itself
+    # publishes. The eligible-band population is needed only for the modelled count and as
+    # the aggregation weight, which is the aggregate node's problem, not this one's.
+    if age_denoms is None:
+        n_qof_rates = 0
+        bands = {}
+    else:
+        bands = age_denoms.attrs["bands"]
+        qof_rates = _estimate_lsoa_prevalence(qof, gp_lsoa, age_denominators=age_denoms)
+        result = result.merge(qof_rates, on="LSOA11CD", how="left")
+        n_qof_rates = len(bands)
+
     # Merge with population and compute afflicted counts.
     #
     # Left-join FROM the population, not an inner join onto the estimate: an LSOA whose
@@ -484,17 +637,16 @@ for year_key in all_year_keys:
     # a list size of 1). Gate before the counts are derived, so the count agrees with the
     # rate, and before the interpolation below reads these files, so a rejected value
     # cannot anchor an interpolation.
-    disease_cols_cur = [c for c in result.columns if c.endswith("_prevalence_rate")]
-    n_rejected = _reject_impossible_rates(result, disease_cols_cur)
+    disease_cols_cur = _rate_cols(result)
+    n_rejected = _reject_impossible_rates(result, disease_cols_cur + _qof_rate_cols(result))
 
     # Compute afflicted counts from prevalence * ONS population. NaN prevalence gives a
     # NaN count, which is what "not measured here" has to look like downstream.
     for rate_col in disease_cols_cur:
-        afflicted_col = rate_col.replace("_prevalence_rate", "_afflicted")
-        result[afflicted_col] = result[rate_col] * result["pop"]
+        result[_afflicted_col(rate_col)] = result[rate_col] * result["pop"]
 
     result.to_csv(out_path, index=False)
-    disease_cols = [c for c in result.columns if c.endswith("_prevalence_rate")]
+    disease_cols = _rate_cols(result)
     cov = result["qof_coverage"]
     n_thin = int((cov < MIN_QOF_COVERAGE).sum() + cov.isna().sum())
     print(f"  QOF {year_key}: {len(result)} LSOAs, {len(disease_cols)} disease subdomains, "
@@ -502,7 +654,9 @@ for year_key in all_year_keys:
           f"{n_thin} LSOAs below the {MIN_QOF_COVERAGE:.0%} floor (left missing), "
           f"{n_rejected} rates rejected as outside [0,1], "
           f"registration coverage min {result['registration_coverage'].min():.4f} "
-          f"({int((result['registration_coverage'] < 0.5).sum())} LSOAs below 0.5, reported not enforced)")
+          f"({int((result['registration_coverage'] < 0.5).sum())} LSOAs below 0.5, reported not enforced), "
+          f"{n_qof_rates} age-restricted rates"
+          + (f" ({', '.join(f'{g}@{b}' for g, b in sorted(bands.items()))})" if bands else " (source has none)"))
     processed_years.append(year_key)
 
 # %% [markdown]
@@ -616,7 +770,7 @@ if len(processed_years) > 1:
         if path.exists():
             df = pd.read_csv(path).set_index("LSOA11CD")
             all_health[yk] = df
-            rate_cols = [c for c in df.columns if c.endswith("_prevalence_rate")]
+            rate_cols = _rate_cols(df) + _qof_rate_cols(df)
             all_disease_cols.update(rate_cols)
 
     all_disease_cols = sorted(all_disease_cols)
@@ -627,8 +781,8 @@ if len(processed_years) > 1:
         for col in all_disease_cols:
             if col not in df.columns:
                 df[col] = np.nan
-                afflicted_col = col.replace("_prevalence_rate", "_afflicted")
-                if afflicted_col not in df.columns:
+                afflicted_col = _afflicted_col(col)
+                if afflicted_col is not None and afflicted_col not in df.columns:
                     df[afflicted_col] = np.nan
 
     # Vectorized interpolation: build a 3D array (years x LSOAs x diseases)
@@ -664,7 +818,7 @@ if len(processed_years) > 1:
             df = all_health[yk]
             df[col] = pd.Series(matrix[i, :], index=all_lsoas).reindex(df.index)
             # Update afflicted counts
-            afflicted_col = col.replace("_prevalence_rate", "_afflicted")
+            afflicted_col = _afflicted_col(col)
             if afflicted_col in df.columns and "pop" in df.columns:
                 df[afflicted_col] = df[col] * df["pop"]
 
@@ -675,10 +829,10 @@ if len(processed_years) > 1:
     n_rejected_interp = 0
     for yk in sorted_years:
         df = all_health[yk]
-        rate_cols = [c for c in df.columns if c.endswith("_prevalence_rate")]
+        rate_cols = _rate_cols(df) + _qof_rate_cols(df)
         n_rejected_interp += _reject_impossible_rates(df, rate_cols)
         for rate_col in rate_cols:
-            afflicted_col = rate_col.replace("_prevalence_rate", "_afflicted")
+            afflicted_col = _afflicted_col(rate_col)
             if afflicted_col in df.columns and "pop" in df.columns:
                 df[afflicted_col] = df[rate_col] * df["pop"]
         out_path = output_dir / f"health_{yk}.csv"
