@@ -77,6 +77,21 @@ CRIME_TYPES = [
     ("Vehicle crime", "vehicle"),
     ("Violence and sexual offences", "violence"),
 ]
+ANTI_SOCIAL_COLUMN = "Anti-social behaviour"
+ANTI_SOCIAL_KEY = "anti_social"
+RECORDED_CRIME_TYPES = [
+    crime_type for crime_type in CRIME_TYPES if crime_type[1] != ANTI_SOCIAL_KEY
+]
+if (
+    (ANTI_SOCIAL_COLUMN, ANTI_SOCIAL_KEY) not in CRIME_TYPES
+    or len(RECORDED_CRIME_TYPES) != 13
+    or len(CRIME_TYPES) != 14
+):
+    raise RuntimeError("Expected 13 recorded-crime categories plus one separate ASB series")
+
+RECORDED_COUNT_COLUMN = "recorded_count"
+RECORDED_CRIME_LABEL = "Police-recorded street crime (excludes ASB)"
+
 HEALTH = [
     ("AF", "Atrial fibrillation"), ("AST", "Asthma"), ("CAN", "Cancer"),
     ("CHD", "Coronary heart disease"), ("CKD", "Chronic kidney disease"),
@@ -89,7 +104,8 @@ HEALTH = [
     ("PAD", "Peripheral arterial disease"), ("PC", "Palliative care"),
     ("RA", "Rheumatoid arthritis"),
     ("STIA", "Stroke or transient ischaemic attack"),
-    ("CVDPP", "CVD primary prevention"), ("SMOK", "Smoking"),
+    ("CVDPP", "CVD primary prevention (withdrawn after 2019-20)"),
+    ("SMOK", "Smoking"),
     ("THY", "Hypothyroidism"),
 ]
 
@@ -334,7 +350,7 @@ def _validate_staged_outputs() -> None:
             dictionary_member = f"{prefix}adi-{level}-data-dictionary.csv"
             with archive.open(dictionary_member) as dictionary_csv:
                 dictionary = pd.read_csv(dictionary_csv)
-            expected_metrics = 1 + len(CRIME_TYPES) + len(HEALTH)
+            expected_metrics = 2 + len(CRIME_TYPES) + len(HEALTH)
             expected_dictionary_rows = expected_metrics + len(HEALTH_QUALITY_COLUMNS)
             if (
                 len(dictionary) != expected_dictionary_rows
@@ -428,6 +444,47 @@ def _validate_staged_outputs() -> None:
                                 ]
                                 raise RuntimeError(
                                     f"Published rates do not reproduce in {member}:\n{sample}"
+                                )
+
+                        if domain == "crime":
+                            recorded_columns = [name for name, _ in RECORDED_CRIME_TYPES]
+                            expected_recorded = chunk[recorded_columns].sum(
+                                axis=1, min_count=1
+                            )
+                            actual_recorded = chunk[RECORDED_COUNT_COLUMN]
+                            inconsistent_blanks = expected_recorded.isna() != actual_recorded.isna()
+                            present = expected_recorded.notna() & actual_recorded.notna()
+                            # Each of the 13 category counts and the aggregate starts at
+                            # three-decimal publication precision, so their independently
+                            # rounded representations can differ by at most 0.007.
+                            mismatched = present & ~np.isclose(
+                                expected_recorded,
+                                actual_recorded,
+                                rtol=0,
+                                atol=0.008,
+                            )
+                            expected_pop = chunk[
+                                f"{RECORDED_CRIME_TYPES[0][0]}{COUNT_POP_SUFFIX}"
+                            ]
+                            actual_pop = chunk[
+                                f"{RECORDED_COUNT_COLUMN}{COUNT_POP_SUFFIX}"
+                            ]
+                            pop_mismatch = ~(
+                                actual_pop.eq(expected_pop)
+                                | (actual_pop.isna() & expected_pop.isna())
+                            )
+                            bad = inconsistent_blanks | mismatched | pop_mismatch
+                            if bad.any():
+                                sample = chunk.loc[
+                                    bad,
+                                    [
+                                        "code", "year", RECORDED_COUNT_COLUMN,
+                                        ANTI_SOCIAL_COLUMN, *recorded_columns,
+                                    ],
+                                ].head()
+                                raise RuntimeError(
+                                    "Recorded-crime aggregate is not the 13-category "
+                                    f"non-ASB sum in {member}:\n{sample}"
                                 )
 
                         if domain == "health":
@@ -593,9 +650,10 @@ def _reaggregate_health_metric(disease: str, year: int) -> None:
         target[rate_col] = target[count_col] / target[covered_col].replace(0, np.nan)
 
 
-# (1) Drop QOF indicators with no usable prevalence series (sparse/empty: present in
-#     only one year or all-zero). Leaves the canonical 21 conditions.
-DROP_HEALTH = {"CVDPP", "SMOK", "THY"}
+# (1) Drop QOF indicators represented in only one source year. CVD primary
+#     prevention remains publishable for its seven-year source window and is left blank
+#     after NHS Digital withdrew the register, matching the treatment of later-starting NDH.
+DROP_HEALTH = {"SMOK", "THY"}
 _before = len(HEALTH)
 HEALTH = [(c, l) for (c, l) in HEALTH if c not in DROP_HEALTH]
 print(f"  health: dropped {sorted(DROP_HEALTH)} -> {len(HEALTH)} conditions (was {_before})")
@@ -680,6 +738,44 @@ for disease, year in HEALTH_FIX:
 # redundant and dangerous: on a wholly missing year, pandas' default sum could turn all-NaN
 # counts into zero. The site now publishes the upstream NaNs and denominators unchanged.
 
+
+def _recorded_crime_total(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """Return the 13-category recorded-crime count and shared coverage population.
+
+    Anti-social behaviour is a separately governed incident series, not part of the main
+    police-recorded crime collection, so it must never enter this aggregate. The recorded
+    categories currently share one force-coverage mask; reject schema drift rather than
+    summing counts measured over different populations.
+    """
+    count_cols = [name for name, _ in RECORDED_CRIME_TYPES]
+    required = count_cols + [f"{name}{COUNT_POP_SUFFIX}" for name in count_cols]
+    missing = [column for column in required if column not in df.columns]
+    if missing:
+        raise ValueError(f"Recorded-crime total is missing required columns: {missing}")
+
+    covered = df[[f"{name}{COUNT_POP_SUFFIX}" for name in count_cols]]
+    first = covered.iloc[:, 0]
+    same = covered.eq(first, axis=0) | (covered.isna() & first.isna().to_numpy()[:, None])
+    if not bool(same.all().all()):
+        raise ValueError(
+            "Recorded-crime category coverage populations differ; cannot derive a rate"
+        )
+    return df[count_cols].sum(axis=1, min_count=1), first
+
+
+def _recorded_crime_total_from_row(row: dict) -> tuple[float, float]:
+    """Row-dict equivalent of `_recorded_crime_total` for compact area profiles."""
+    counts = [row[name] for name, _ in RECORDED_CRIME_TYPES]
+    covered = [row[f"{name}{COUNT_POP_SUFFIX}"] for name, _ in RECORDED_CRIME_TYPES]
+    first = covered[0]
+    if any(
+        not ((pd.isna(value) and pd.isna(first)) or value == first)
+        for value in covered[1:]
+    ):
+        raise ValueError("Recorded-crime category populations differ in an area record")
+    total = sum(float(value) for value in counts if not pd.isna(value))
+    return (total if any(not pd.isna(value) for value in counts) else np.nan), first
+
 # canonical code/name per level (sorted by code), from the latest employment year
 codes_by_level: dict[str, list[str]] = {}
 names_by_level: dict[str, dict[str, str]] = {}
@@ -708,7 +804,7 @@ https://adi.apps.autonomy.work
 
 CONTENTS
   adi-{level}-employment.csv       Claimant Count, Nomis NM_162_1
-  adi-{level}-crime.csv            Police-recorded street crime, data.police.uk
+  adi-{level}-crime.csv            Recorded street crime plus separate ASB incidents
   adi-{level}-health.csv           Modelled QOF prevalence and two coverage indicators
   adi-{level}-data-dictionary.csv  Metric/indicator definitions, units, sources and availability
   adi-{level}-geography.csv        Current LAD and region codes/names for each area
@@ -753,9 +849,13 @@ COUNT SEMANTICS
   largest relative effects in low-count areas. It is neither a unique-person
   count nor a sum of monthly values.
 
-  Crime counts are annual police-recorded street incidents assigned or apportioned
-  to LSOAs. British Transport Police incidents are excluded. They are not a survey
-  estimate of all crime.
+  Crime counts are annual street incidents assigned or apportioned to LSOAs.
+  `recorded_count` sums the 13 police-recorded crime categories and excludes
+  `Anti-social behaviour`. ASB remains available as its own incident series: it is
+  governed by the National Standard for Incident Recording rather than the main
+  police-recorded crime collection and must not be added to `recorded_count` when
+  describing recorded crime. British Transport Police incidents are excluded.
+  These measures are not survey estimates of all crime.
 
   Health `_afflicted` values are modelled estimates, not observed resident counts.
   They combine published GP-practice QOF prevalence with LSOA GP-registration
@@ -820,9 +920,14 @@ AVAILABILITY AND ADJUSTMENTS
   is a comparability warning, not evidence that every condition moved downward.
   See https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data/2020-21
 
-  Smoking (SMOK), hypothyroidism (THY) and CVD primary prevention (CVDPP) are
-  excluded because they do not provide a complete 2014-2025 prevalence series.
-  Exact per-metric availability and definitions are in the data dictionary.
+  CVD primary prevention (CVDPP) is published for output years 2014-2020 (QOF
+  2013-14 through 2019-20) and is blank from 2021 after the register was
+  withdrawn. There is a sharp England-level break between output years 2014 and
+  2015, so comparisons across that boundary should be treated cautiously.
+  Dartford's output-year 2019 rate (0.00624) also reverses sharply against 2018
+  (0.00303) and 2020 (0.00412); it is retained but has not been source-validated.
+  Smoking (SMOK) and hypothyroidism (THY) are excluded because each is available
+  in only the first source year. Exact availability is in the data dictionary.
 
 LICENCE
   Open Government Licence v3.0. Boundaries (c) ONS / Crown copyright.
@@ -850,12 +955,13 @@ def _nonzero_missing_summary(
     domain: str,
     column: str,
     first_year: int = YEARS[0],
+    last_year: int = YEARS[-1],
 ) -> str:
     missing = _missing_counts(level, domain, column)
     nonzero = [
         f"{year}: {count:,}"
         for year, count in missing.items()
-        if year >= first_year and count
+        if first_year <= year <= last_year and count
     ]
     return "; ".join(nonzero) if nonzero else "none"
 
@@ -894,7 +1000,7 @@ def _crime_gap_table() -> str:
 
 def _health_gap_table() -> str:
     rate_columns = [f"{code}_afflicted_rate" for code, _ in HEALTH]
-    lines = ["    year   LSOAs with all 21 metric rates blank"]
+    lines = [f"    year   LSOAs with all {len(HEALTH)} metric rates blank"]
     for year in YEARS:
         frame = data["lsoa"]["health"].get(year)
         missing = [column for column in rate_columns if column not in frame.columns]
@@ -1090,17 +1196,51 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             "JSA/UC double counting is possible"
         ),
     }]
+    rows.append({
+        **common,
+        "domain": "crime",
+        "metric": "recorded_crime",
+        "label": RECORDED_CRIME_LABEL,
+        "count_column": RECORDED_COUNT_COLUMN,
+        "count_unit": "police-recorded street crimes (may be fractional after apportionment)",
+        "count_definition": (
+            "Sum of the 13 police-recorded crime categories in this file; excludes the "
+            "separately governed Anti-social behaviour incident series"
+        ),
+        "coverage_population_column": f"{RECORDED_COUNT_COLUMN}{COUNT_POP_SUFFIX}",
+        "rate_column": f"{RECORDED_COUNT_COLUMN}_rate",
+        "rate_unit": "annual recorded crimes per resident, rounded to 8 decimal places",
+        "first_year": 2014,
+        "last_year": 2025,
+        "source": "data.police.uk",
+        "availability_and_adjustments": (
+            "Calendar years; a force-year is withheld unless all 12 monthly files are "
+            "non-empty and at least 90% of potentially English records have an English "
+            f"LSOA code. Missing {level} rows by year (years not listed have zero): "
+            f"{_nonzero_missing_summary(level, 'crime', f'{RECORDED_CRIME_TYPES[0][0]}_rate')}"
+        ),
+    })
     for label, key in CRIME_TYPES:
         count_col = label
+        is_asb = key == ANTI_SOCIAL_KEY
         rows.append({
             **common,
             "domain": "crime",
             "metric": key,
-            "label": label,
+            "label": "Anti-social behaviour incidents (separate series)" if is_asb else label,
             "count_column": count_col,
-            "count_unit": "police-recorded street incidents (may be fractional after apportionment)",
+            "count_unit": (
+                "anti-social behaviour incidents (may be fractional after apportionment)"
+                if is_asb
+                else "police-recorded street crimes (may be fractional after apportionment)"
+            ),
             "count_definition": (
-                "Annual incidents assigned or apportioned to LSOAs; British Transport Police excluded"
+                "Separately governed incident series recorded under the National Standard for "
+                "Incident Recording; not part of the main police-recorded crime collection and "
+                "excluded from recorded_count; British Transport Police excluded"
+                if is_asb
+                else "Annual police-recorded crimes assigned or apportioned to LSOAs; "
+                     "British Transport Police excluded"
             ),
             "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
             "rate_column": f"{count_col}_rate",
@@ -1109,7 +1249,11 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             "last_year": 2025,
             "source": "data.police.uk",
             "availability_and_adjustments": (
-                "Calendar years; a force-year is withheld unless all 12 monthly files are "
+                (
+                    "Separate ASB incident series; excluded from the recorded-crime aggregate. "
+                    if is_asb else ""
+                )
+                + "Calendar years; a force-year is withheld unless all 12 monthly files are "
                 "non-empty and at least 90% of potentially English records have an English "
                 f"LSOA code. Missing {level} rows by year (years not listed have zero): "
                 f"{_nonzero_missing_summary(level, 'crime', f'{count_col}_rate')}"
@@ -1129,6 +1273,23 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             notes.append(
                 f"missing {level} rows by year from 2021 (years not listed have zero): "
                 f"{_nonzero_missing_summary(level, 'health', f'{count_col}_rate', 2021)}"
+            )
+        if code == "CVDPP":
+            notes.append(
+                "published for output years 2014-2020 (QOF 2013-14 through 2019-20); "
+                "blank from 2021 after the register was withdrawn"
+            )
+            notes.append(
+                "sharp England-level break between output years 2014 and 2015; treat "
+                "comparisons across that boundary cautiously"
+            )
+            notes.append(
+                "Dartford output year 2019 is 0.00624 versus 0.00303 in 2018 and 0.00412 "
+                "in 2020; retained but not source-validated"
+            )
+            notes.append(
+                f"missing {level} rows within 2014-2020 (years not listed have zero): "
+                f"{_nonzero_missing_summary(level, 'health', f'{count_col}_rate', 2014, 2020)}"
             )
         if code == "EP":
             notes.append("8 implausible LSOA values rejected in 2016")
@@ -1161,7 +1322,7 @@ def _data_dictionary(level: str) -> pd.DataFrame:
                 "rounded to 8 decimal places"
             ),
             "first_year": 2021 if code == "NDH" else 2014,
-            "last_year": 2025,
+            "last_year": 2020 if code == "CVDPP" else 2025,
             "source": "NHS Digital / NHS England QOF",
             "availability_and_adjustments": "; ".join(notes),
         })
@@ -1298,6 +1459,24 @@ for lv in LEVELS:
             continue
         tidy = pd.concat(frames, ignore_index=True)
         member_name = f"adi-{lv}-{dom}.csv"
+        if dom == "crime":
+            aggregate_columns = {
+                RECORDED_COUNT_COLUMN,
+                f"{RECORDED_COUNT_COLUMN}{COUNT_POP_SUFFIX}",
+                f"{RECORDED_COUNT_COLUMN}_rate",
+            }
+            overlap = aggregate_columns & set(tidy.columns)
+            if overlap:
+                raise ValueError(
+                    f"Cannot derive {member_name} recorded-crime aggregate; "
+                    f"columns already exist: {sorted(overlap)}"
+                )
+            recorded_count, recorded_pop = _recorded_crime_total(tidy)
+            tidy[RECORDED_COUNT_COLUMN] = recorded_count
+            tidy[f"{RECORDED_COUNT_COLUMN}{COUNT_POP_SUFFIX}"] = recorded_pop
+            tidy[f"{RECORDED_COUNT_COLUMN}_rate"] = (
+                recorded_count / recorded_pop.replace(0, np.nan)
+            )
         # code, name, year first; drop the dropped-QOF columns entirely rather
         # than shipping empty ones.
         indicator_columns: tuple[str, ...] = ()
@@ -1310,6 +1489,10 @@ for lv in LEVELS:
             indicator_columns = HEALTH_QUALITY_COLUMNS
         lead = [c for c in ("code", "name", "year", "pop") if c in tidy.columns]
         count_cols = _metric_count_columns(tidy.columns)
+        if dom == "crime":
+            count_cols = [RECORDED_COUNT_COLUMN] + [
+                column for column in count_cols if column != RECORDED_COUNT_COLUMN
+            ]
         metric_cols = [
             column for count_col in count_cols
             for column in (count_col, f"{count_col}{COUNT_POP_SUFFIX}", f"{count_col}_rate")
@@ -1416,43 +1599,6 @@ for lv in LEVELS:
                {"codes": codes, "names": [names_by_level[lv].get(c, c) for c in codes]})
 
 # ---------------------------------------------------------------- per-(level) metric value series helpers
-def _crime_total(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
-    """Return total crime count and its shared coverage population.
-
-    Crime types currently share one force-coverage mask. Refuse to invent a total if
-    that invariant changes: counts measured over different populations cannot be summed
-    into a meaningful rate without an explicit total-crime denominator policy.
-    """
-    count_cols = [name for name, _ in CRIME_TYPES]
-    required = count_cols + [f"{name}{COUNT_POP_SUFFIX}" for name in count_cols]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError(f"Crime total is missing required columns: {missing}")
-
-    covered = df[[f"{name}{COUNT_POP_SUFFIX}" for name in count_cols]]
-    first = covered.iloc[:, 0]
-    same = covered.eq(first, axis=0) | (covered.isna() & first.isna().to_numpy()[:, None])
-    if not bool(same.all().all()):
-        raise ValueError(
-            "Crime-type coverage populations differ; cannot derive an all-crime rate"
-        )
-    return df[count_cols].sum(axis=1, min_count=1), first
-
-
-def _crime_total_from_row(row: dict) -> tuple[float, float]:
-    """Row-dict equivalent of `_crime_total`, used by compact area profiles."""
-    counts = [row[name] for name, _ in CRIME_TYPES]
-    covered = [row[f"{name}{COUNT_POP_SUFFIX}"] for name, _ in CRIME_TYPES]
-    first = covered[0]
-    if any(
-        not ((pd.isna(value) and pd.isna(first)) or value == first)
-        for value in covered[1:]
-    ):
-        raise ValueError("Crime-type coverage populations differ in an area record")
-    total = sum(float(value) for value in counts if not pd.isna(value))
-    return (total if any(not pd.isna(value) for value in counts) else np.nan), first
-
-
 def metric_series_for_level(lv, domain, metric_key):
     """Return dict year -> pd.Series(code->value) for a metric at a level."""
     out = {}
@@ -1464,7 +1610,7 @@ def metric_series_for_level(lv, domain, metric_key):
             s = df["claimant_count_rate"]
         elif domain == "crime":
             if metric_key == "total":
-                total, covered_pop = _crime_total(df)
+                total, covered_pop = _recorded_crime_total(df)
                 s = total / covered_pop.replace(0, np.nan)
             else:
                 name = next(t[0] for t in CRIME_TYPES if t[1] == metric_key)
@@ -1481,9 +1627,33 @@ def metric_series_for_level(lv, domain, metric_key):
 # metric definitions
 def domain_metrics():
     emp = [{"key": "claimant_rate", "label": "Claimant Count rate", "fmt": "pct"}]
-    cri = [{"key": "total", "label": "All street crime", "fmt": "rate1k"}]
-    cri += [{"key": slug, "label": name, "fmt": "rate1k"} for name, slug in CRIME_TYPES]
-    hea = [{"key": code, "label": label, "fmt": "pct"} for code, label in HEALTH]
+    cri = [{
+        "key": "total",
+        "label": RECORDED_CRIME_LABEL,
+        "fmt": "rate1k",
+        "definition": "Sum of 13 police-recorded crime categories; anti-social behaviour excluded",
+    }]
+    cri += [
+        {
+            "key": slug,
+            "label": (
+                "Anti-social behaviour incidents (separate series)"
+                if slug == ANTI_SOCIAL_KEY else name
+            ),
+            "fmt": "rate1k",
+        }
+        for name, slug in CRIME_TYPES
+    ]
+    hea = []
+    for code, label in HEALTH:
+        metric = {"key": code, "label": label, "fmt": "pct"}
+        if code == "CVDPP":
+            metric["definition"] = (
+                "Published for output years 2014-2020 and blank after withdrawal; "
+                "2014-2015 has a sharp national level break, and Dartford 2019 remains "
+                "an unvalidated local reversal"
+            )
+        hea.append(metric)
     return {"employment": emp, "crime": cri, "health": hea}
 
 
@@ -1542,8 +1712,14 @@ manifest = {
     "domains": {
         "employment": {"label": "Employment", "metrics": METRICS["employment"],
                        "source": "Claimant Count (Nomis NM_162_1)"},
-        "crime": {"label": "Crime", "metrics": METRICS["crime"],
-                  "source": "Police-recorded street crime (data.police.uk)"},
+        "crime": {
+            "label": "Crime",
+            "metrics": METRICS["crime"],
+            "source": "Street-level crime and ASB incidents (data.police.uk)",
+            "note": "The headline total and crime rankings sum 13 police-recorded "
+                    "crime categories. Anti-social behaviour is a separately governed "
+                    "incident series and is excluded from that total; select it separately.",
+        },
         # `note` is surfaced in the Explorer beneath the source line. The QOF
         # year offset is not cosmetic: comparing health against employment or
         # crime for the same labelled year compares different periods. NHS Digital
@@ -1553,9 +1729,11 @@ manifest = {
                    "source": "GP disease prevalence, QOF (NHS Digital)",
                    "note": "QOF years run April–March and are labelled by the year they end, "
                            "so health ‘2021’ covers April 2020–March 2021 "
-                           "(employment and crime are calendar years). NHS Digital warns that "
-                           "QOF 2020–21 implementation and definition changes affect "
-                           "comparisons, especially for obesity, asthma and COPD."},
+                           "(employment and crime are calendar years). CVD primary prevention "
+                           "is available only for output years 2014–2020 and is blank after its "
+                           "withdrawal; its sharp 2014–2015 level break limits comparison. NHS "
+                           "Digital warns that QOF 2020–21 implementation and definition changes "
+                           "affect comparisons, especially for obesity, asthma and COPD."},
     },
     "counts": {lv: len(codes_by_level[lv]) for lv in LEVELS},
 }
@@ -1588,7 +1766,9 @@ def build_record(lv, code):
             emp["count"].append(None); emp["pop"].append(None)
             emp["count_pop"].append(None); emp["rate"].append(None)
     rec["employment"] = emp
-    # Crime likewise carries a denominator for the total and each type.
+    # The compatibility `total_*` fields are the recorded-crime aggregate: 13 crime
+    # categories with the separately governed anti-social-behaviour series excluded.
+    # Each category and the aggregate carry their own coverage denominator.
     cri = {
         "total_count": [], "total_pop": [], "total_rate": [], "pop": [],
         "types": {slug: {"count": [], "pop": [], "rate": []} for _, slug in CRIME_TYPES},
@@ -1598,7 +1778,7 @@ def build_record(lv, code):
         if r is not None:
             area_pop = r["pop"]
             cri["pop"].append(int(area_pop) if not pd.isna(area_pop) else None)
-            total, total_pop = _crime_total_from_row(r)
+            total, total_pop = _recorded_crime_total_from_row(r)
             for name, slug in CRIME_TYPES:
                 count = r[name]
                 covered = r[f"{name}{COUNT_POP_SUFFIX}"]
@@ -1692,6 +1872,8 @@ def england_series(domain, mk):
 
 emp_eng = england_series("employment", "claimant_rate")
 crime_eng = england_series("crime", "total")
+crime_eng["label"] = RECORDED_CRIME_LABEL
+crime_eng["includes_asb"] = False
 dep_eng = england_series("health", "DEP")
 
 # COVID by LAD 2019->2020
@@ -1762,7 +1944,7 @@ def adi_lsoa_year(year):
     cc = data["lsoa"]["employment"][year].reset_index()[["code", "claimant_count_rate"]].rename(
         columns={"code": "LSOA21CD"})
     cr = data["lsoa"]["crime"][year].reset_index()
-    crime_total, crime_pop = _crime_total(cr)
+    crime_total, crime_pop = _recorded_crime_total(cr)
     cr["adi_crime_rate"] = crime_total / crime_pop.replace(0, np.nan)
     cr = cr[["code", "adi_crime_rate"]].rename(columns={"code": "LSOA21CD"})
     m = cc.merge(cr, on="LSOA21CD", how="inner").rename(columns={"claimant_count_rate": "adi_claimant_rate"})
@@ -1881,6 +2063,11 @@ n_major = c1519["lsoa_major"]
 
 imd_out = {
     "correlations": {"2015": corr15, "2019": corr19, "2025": corr25},
+    "crime_measure": {
+        "label": RECORDED_CRIME_LABEL,
+        "category_count": len(RECORDED_CRIME_TYPES),
+        "includes_asb": False,
+    },
     "annual_trend": emp_eng,
     "imd_editions": [2015, 2019, 2025],
     "covid": {"y2019": dashboard["headline"]["covid"]["y2019"],
