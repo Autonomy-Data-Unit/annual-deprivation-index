@@ -109,6 +109,9 @@ site/static/downloads/
 # build_data.py stages a whole build into a temp dir and swaps it in, so an
 # interrupted run leaves one behind. Generated, never committed.
 site/.build-data-*/
+# Claude Code worktrees for isolated agent runs — created inside the repo,
+# never part of it.
+.claude/worktrees/
 site/static/tiles/
 site/static/geo/
 site/static/brand/
