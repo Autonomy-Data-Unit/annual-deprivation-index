@@ -10,9 +10,23 @@
 [app]
 name = "adi"
 server = "adu-apps"
-method = "static"
-source = "site/build"          # SvelteKit adapter-static output
+# We serve the site ourselves rather than using AppGarden's `static` method.
+# That method renders a fixed Caddy block with a bare file_server (no
+# compression: a 1.2 MB JSON left Explorer blank ~25s on a slow line, #38) and
+# falls back to /index.html for ANY unknown path, so dead URLs answered HTTP 200
+# and search engines indexed them as real pages (#44). AppGarden has no per-app
+# Caddy override, but any non-static method renders `reverse_proxy localhost:{port}`
+# instead — so we run our own Caddy and keep full control. See site/Caddyfile.
+method = "dockerfile"
+source = "site"                # needs the Dockerfile + build/ beside it
+container_port = 8080
 subdomain = "adi"              # → adi.<server domain> = adi.apps.autonomy.work
+
+# Only the Dockerfile, the Caddyfile and build/ are needed in the image. Without
+# this the upload would also carry site/static/, which holds a second copy of the
+# 128 MB download bundles and the map tiles that are already inside build/.
+exclude = ["node_modules", ".svelte-kit", "src", "static", "scripts",
+           "package.json", "package-lock.json", "svelte.config.js", "vite.config.js"]
 
 # AppGarden restamps created_at on every deploy; pin it so the app keeps its
 # real origin date (the first deploy, 2026-06-23) in the garden listing.

@@ -10,8 +10,13 @@ const config = {
     adapter: adapter({
       pages: 'build',
       assets: 'build',
-      // TODO(cleanup): enable precompress — once AppGarden's static Caddy serves .br/.gz siblings.
-      precompress: false
+      // We serve the site ourselves now (site/Dockerfile + site/Caddyfile) rather
+      // than through AppGarden's static hosting, so precompressed siblings are
+      // actually served — see `precompressed br gzip` in the Caddyfile.
+      precompress: true,
+      // Gives Caddy a real page to return WITH a 404 status for unknown paths,
+      // instead of AppGarden's blanket /index.html fallback that answered 200.
+      fallback: '404.html'
     }),
     paths: {
       // served at the domain root on AppGarden
