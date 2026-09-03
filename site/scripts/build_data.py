@@ -141,6 +141,55 @@ HEALTH = [
     ("THY", "Hypothyroidism"),
 ]
 
+# QOF publishes these registers against an eligible-age practice list as well as the
+# all-ages list used by the existing ADI metric. The second representation is deliberately
+# additive: existing `{CODE}_afflicted` outputs retain their definition and values, while
+# `{CODE}_qof_afflicted` uses the corresponding resident eligible-age population. These
+# are age-restricted rates, not age-standardised rates.
+QOF_ELIGIBLE_HEALTH = {
+    "AST": {
+        "first_year": 2021,
+        "eligible_population": "residents aged 6 and over",
+    },
+    "CKD": {
+        "first_year": 2015,
+        "eligible_population": "residents aged 18 and over",
+    },
+    "DEP": {
+        "first_year": 2015,
+        "eligible_population": "residents aged 18 and over",
+    },
+    "DM": {
+        "first_year": 2015,
+        "eligible_population": "residents aged 17 and over",
+    },
+    "EP": {
+        "first_year": 2015,
+        "eligible_population": "residents aged 18 and over",
+    },
+    "NDH": {
+        "first_year": 2021,
+        "eligible_population": "residents aged 18 and over",
+    },
+    "OB": {
+        "first_year": 2015,
+        "eligible_population": (
+            "residents aged 16 and over in output year 2015, then residents aged "
+            "18 and over from 2016"
+        ),
+    },
+    "OST": {
+        "first_year": 2015,
+        "eligible_population": "residents aged 50 and over",
+    },
+    "RA": {
+        "first_year": 2015,
+        "eligible_population": "residents aged 16 and over",
+    },
+}
+if set(QOF_ELIGIBLE_HEALTH) - {code for code, _ in HEALTH}:
+    raise RuntimeError("QOF eligible-population metadata names an unknown health condition")
+
 # ---------------------------------------------------------------- helpers
 
 def rnd(x, n=6):
@@ -395,7 +444,7 @@ def _validate_staged_outputs() -> None:
             dictionary_member = f"{prefix}adi-{level}-data-dictionary.csv"
             with archive.open(dictionary_member) as dictionary_csv:
                 dictionary = pd.read_csv(dictionary_csv)
-            expected_metrics = 2 + len(CRIME_TYPES) + len(HEALTH)
+            expected_metrics = 2 + len(CRIME_TYPES) + len(HEALTH) + len(QOF_HEALTH)
             expected_dictionary_rows = expected_metrics + len(HEALTH_QUALITY_COLUMNS)
             if (
                 len(dictionary) != expected_dictionary_rows
@@ -673,9 +722,8 @@ def _required_metric_columns(df: pd.DataFrame, count_col: str) -> tuple[str, str
     return covered_col, rate_col
 
 
-def _reaggregate_health_metric(disease: str, year: int) -> None:
-    """Rebuild one corrected health metric at every higher level from LSOAs."""
-    count_col = f"{disease}_afflicted"
+def _reaggregate_health_metric(count_col: str, year: int) -> None:
+    """Rebuild one corrected health count/population/rate triple from LSOAs."""
     source = data["lsoa"]["health"][year]
     covered_col, rate_col = _required_metric_columns(source, count_col)
     source_codes = source.index.to_series()
@@ -689,7 +737,8 @@ def _reaggregate_health_metric(disease: str, year: int) -> None:
         if target_codes.isna().any():
             missing = source.index[target_codes.isna()].tolist()
             raise ValueError(
-                f"Cannot propagate {disease} {year}: LSOAs have no {level} mapping: {missing[:5]}"
+                f"Cannot propagate {count_col} {year}: "
+                f"LSOAs have no {level} mapping: {missing[:5]}"
             )
         grouped = (
             source[[count_col, covered_col]]
@@ -700,12 +749,21 @@ def _reaggregate_health_metric(disease: str, year: int) -> None:
         target = data[level]["health"][year]
         if set(grouped.index) != set(target.index):
             raise ValueError(
-                f"Cannot propagate {disease} {year} to {level}: corrected and stored code sets differ"
+                f"Cannot propagate {count_col} {year} to {level}: "
+                "corrected and stored code sets differ"
             )
         aligned = grouped.reindex(target.index)
         target[count_col] = aligned[count_col]
         target[covered_col] = aligned[covered_col]
         target[rate_col] = target[count_col] / target[covered_col].replace(0, np.nan)
+
+
+def _health_count_variants(disease: str) -> list[str]:
+    """Count columns that must receive the same publication-stage correction."""
+    columns = [f"{disease}_afflicted"]
+    if disease in QOF_ELIGIBLE_HEALTH:
+        columns.append(f"{disease}_qof_afflicted")
+    return columns
 
 
 # (1) Drop QOF indicators represented in only one source year. CVD primary
@@ -715,6 +773,13 @@ DROP_HEALTH = {"SMOK", "THY"}
 _before = len(HEALTH)
 HEALTH = [(c, l) for (c, l) in HEALTH if c not in DROP_HEALTH]
 print(f"  health: dropped {sorted(DROP_HEALTH)} -> {len(HEALTH)} conditions (was {_before})")
+
+QOF_HEALTH = [
+    (f"{code}_qof", f"{label} — QOF eligible-age rate (not age-standardised)")
+    for code, label in HEALTH
+    if code in QOF_ELIGIBLE_HEALTH
+]
+PUBLISHED_HEALTH_METRICS = [*HEALTH, *QOF_HEALTH]
 
 
 # (2) Reject implausible LSOA health spikes; never clamp them to the boundary,
@@ -730,13 +795,14 @@ HEALTH_SPIKE_BOUNDS = {
     "HF": {"max_rate": 0.05, "max_neighbour_factor": 3.0},
 }
 for disease, bound in HEALTH_SPIKE_BOUNDS.items():
-    count_col = f"{disease}_afflicted"
+    count_columns = _health_count_variants(disease)
     affected_years = []
     rejected = 0
     for year in YEARS[1:-1]:
         cur = data["lsoa"]["health"][year]
         left = data["lsoa"]["health"][year - 1]
         right = data["lsoa"]["health"][year + 1]
+        count_col = f"{disease}_afflicted"
         covered_col, rate_col = _required_metric_columns(cur, count_col)
         neighbour_mean = (
             left[rate_col].reindex(cur.index) + right[rate_col].reindex(cur.index)
@@ -747,46 +813,94 @@ for disease, bound in HEALTH_SPIKE_BOUNDS.items():
         )
         n_bad = int(bad.sum())
         if n_bad:
-            cur.loc[bad, [count_col, covered_col, rate_col]] = np.nan
+            for variant in count_columns:
+                variant_pop, variant_rate = _required_metric_columns(cur, variant)
+                cur.loc[bad, [variant, variant_pop, variant_rate]] = np.nan
             affected_years.append(year)
             rejected += n_bad
             print(f"  health: rejected {n_bad} implausible {disease} LSOA values in {year}")
     for year in affected_years:
-        _reaggregate_health_metric(disease, year)
+        for count_col in count_columns:
+            _reaggregate_health_metric(count_col, year)
     print(f"  health: {disease} sanity guard rejected {rejected} values in total")
 
 
 # (3) Single-year source anomalies: a disease whose register switched basis for one
 #     publication (DEP 2023-24 reported new-diagnosis incidence rather than cumulative
 #     prevalence; OST 2014-15 dip-and-reverse). Discard the affected LSOA observation
-#     first, then interpolate from flanking years. The modelled count covers the current
-#     year's whole LSOA population. Rebuild all higher levels from those corrected LSOAs
-#     rather than independently interpolating each geography.
+#     first, then interpolate from flanking years. Re-derive the all-ages and eligible-age
+#     counts against their respective current-year populations, then rebuild higher levels
+#     from those corrected LSOAs rather than interpolating each geography independently.
 HEALTH_FIX = [("DEP", 2024), ("OST", 2015)]
 for disease, year in HEALTH_FIX:
-    count_col = f"{disease}_afflicted"
     cur = data["lsoa"]["health"][year]
     left = data["lsoa"]["health"][year - 1]
     right = data["lsoa"]["health"][year + 1]
-    covered_col, rate_col = _required_metric_columns(cur, count_col)
+    count_columns = _health_count_variants(disease)
 
-    left_rate = left[rate_col].reindex(cur.index)
-    right_rate = right[rate_col].reindex(cur.index)
-    interpolated_rate = (left_rate + right_rate) / 2.0
-    valid = interpolated_rate.notna() & cur["pop"].notna()
+    # Preflight both representations before mutating either. A schema that lacks the
+    # eligible-population triple must fail rather than applying the known-year correction
+    # only to the all-ages series and publishing two silently inconsistent views.
+    triples = {}
+    for count_col in count_columns:
+        covered_col, rate_col = _required_metric_columns(cur, count_col)
+        _required_metric_columns(left, count_col)
+        _required_metric_columns(right, count_col)
+        triples[count_col] = (covered_col, rate_col)
 
-    # The whole source-year metric is known to be on the wrong basis, so values without
-    # two valid anchors stay missing rather than leaking the bad source observation through.
-    cur[[count_col, covered_col, rate_col]] = np.nan
-    cur.loc[valid, rate_col] = interpolated_rate.loc[valid]
-    cur.loc[valid, covered_col] = cur.loc[valid, "pop"]
-    cur.loc[valid, count_col] = (
-        cur.loc[valid, rate_col] * cur.loc[valid, covered_col]
-    )
-    _reaggregate_health_metric(disease, year)
+    all_age_count = f"{disease}_afflicted"
+    all_age_rate_col = triples[all_age_count][1]
+    source_rates = {
+        count_col: cur[rate_col].copy()
+        for count_col, (_, rate_col) in triples.items()
+    }
+    all_age_interpolated = (
+        left[all_age_rate_col].reindex(cur.index)
+        + right[all_age_rate_col].reindex(cur.index)
+    ) / 2.0
+
+    interpolated = {}
+    for count_col, (covered_col, rate_col) in triples.items():
+        if count_col == all_age_count:
+            corrected_rate = all_age_interpolated
+        elif left[rate_col].notna().any() and right[rate_col].notna().any():
+            corrected_rate = (
+                left[rate_col].reindex(cur.index) + right[rate_col].reindex(cur.index)
+            ) / 2.0
+        elif disease == "OST" and year == 2015:
+            # OST 2015 is the first eligible-population release, so it has no 2014
+            # eligible-rate anchor. Its source numerator has the same known anomaly as
+            # the all-ages view; rescale the contemporaneous eligible rate by the exact
+            # all-ages correction factor while retaining the valid 2015 50+ denominator.
+            correction_factor = all_age_interpolated / source_rates[
+                all_age_count
+            ].replace(0, np.nan)
+            corrected_rate = source_rates[count_col] * correction_factor
+        else:
+            raise ValueError(
+                f"Cannot correct {count_col} {year}: eligible-rate anchors are unavailable"
+            )
+        # Preserve the original all-ages correction exactly. The second metric instead
+        # retains its own current-year eligible-age denominator.
+        denominator = (
+            cur["pop"].copy()
+            if count_col == all_age_count
+            else cur[covered_col].copy()
+        )
+        valid = corrected_rate.notna() & denominator.notna() & denominator.gt(0)
+
+        # The whole source-year metric is known to be on the wrong basis, so values without
+        # every input required by its correction stay missing rather than leaking it through.
+        cur[[count_col, covered_col, rate_col]] = np.nan
+        cur.loc[valid, rate_col] = corrected_rate.loc[valid]
+        cur.loc[valid, covered_col] = denominator.loc[valid]
+        cur.loc[valid, count_col] = corrected_rate.loc[valid] * denominator.loc[valid]
+        _reaggregate_health_metric(count_col, year)
+        interpolated[count_col] = int(valid.sum())
+
     print(
-        f"  health: {disease} {year} interpolated {int(valid.sum())} LSOAs once; "
-        "rebuilt LAD/Region/England from them"
+        f"  health: {disease} {year} interpolated paired all-age/eligible-population "
+        f"metrics ({interpolated}); rebuilt LAD/Region/England from them"
     )
 
 
@@ -1131,6 +1245,36 @@ def _validate_health_quality_columns(tidy: pd.DataFrame, member: str) -> None:
         raise ValueError(f"Health coverage indicator outside its valid range in {member}")
 
 
+def _validate_qof_health_metrics(tidy: pd.DataFrame, member: str) -> None:
+    """Require every eligible-population triple and preserve pre-collection blanks."""
+    if "year" not in tidy:
+        raise ValueError(f"Cannot verify eligible-population health years in {member}")
+    for code, metadata in QOF_ELIGIBLE_HEALTH.items():
+        count_col = f"{code}_qof_afflicted"
+        covered_col, rate_col = _required_metric_columns(tidy, count_col)
+        triple = [count_col, covered_col, rate_col]
+        before_collection = tidy["year"] < metadata["first_year"]
+        leaked = tidy.loc[before_collection, triple].notna().any(axis=1)
+        if leaked.any():
+            sample = tidy.loc[leaked[leaked].index, ["code", "year", *triple]].head()
+            raise ValueError(
+                f"{member}:{code} eligible-population values precede QOF collection:\n{sample}"
+            )
+        if not tidy.loc[~before_collection, rate_col].notna().any():
+            raise ValueError(
+                f"{member}:{code} eligible-population rate is blank in every collected year"
+            )
+        observed = tidy.loc[tidy[rate_col].notna(), triple]
+        if (
+            not np.isfinite(observed).all().all()
+            or (observed < 0).any().any()
+            or (observed[rate_col] > 1).any()
+        ):
+            raise ValueError(
+                f"{member}:{code} eligible-population triple is outside its valid range"
+            )
+
+
 def _serialise_download_table(
     tidy: pd.DataFrame,
     member: str,
@@ -1386,6 +1530,71 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             "source": "NHS Digital / NHS England QOF",
             "availability_and_adjustments": "; ".join(notes),
         })
+    health_labels = dict(HEALTH)
+    qof_labels = dict(QOF_HEALTH)
+    health_fixes = dict(HEALTH_FIX)
+    for code, metadata in QOF_ELIGIBLE_HEALTH.items():
+        label = health_labels[code]
+        count_col = f"{code}_qof_afflicted"
+        first_year = metadata["first_year"]
+        notes = [
+            "QOF financial year labelled by ending year",
+            f"intentionally blank before output year {first_year} because QOF did not "
+            "publish a distinct eligible-age denominator for this condition",
+            f"eligible population: {metadata['eligible_population']}",
+            "alternative denominator for the same condition as the all-ages metric; do not "
+            "sum or average the two representations",
+            f"missing {level} rows from {first_year} (years not listed have zero): "
+            f"{_nonzero_missing_summary(level, 'health', f'{count_col}_rate', first_year)}",
+        ]
+        if code == "EP":
+            notes.append(
+                "the same 8 implausible LSOA observations as the all-ages metric are "
+                "rejected in 2016"
+            )
+        if code in health_fixes:
+            if code == "OST":
+                notes.append(
+                    "output year 2015 is rescaled by the same per-LSOA correction factor "
+                    "as the all-ages rate because this first eligible-population year has "
+                    "no earlier eligible-rate anchor; the 2015 50+ denominator is retained, "
+                    "then the metric is reaggregated"
+                )
+            else:
+                notes.append(
+                    f"output year {health_fixes[code]} is interpolated from adjacent LSOA "
+                    "eligible-population rates only where both anchors exist, in parallel "
+                    "with the all-ages correction, then reaggregated"
+                )
+        rows.append({
+            **common,
+            "domain": "health",
+            "metric": f"{code}_qof",
+            "label": qof_labels[f"{code}_qof"],
+            "count_column": count_col,
+            "count_unit": "modelled eligible-age people (fractional)",
+            "count_definition": (
+                f"Alternative representation of the same {label} estimate as "
+                f"{code}_afflicted: the practice-weighted QOF register/list rate is "
+                "multiplied by the corresponding resident eligible-age population. Do not "
+                f"add to or average with {code}_afflicted"
+            ),
+            "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
+            "coverage_population_definition": (
+                f"{metadata['eligible_population'].capitalize()} covered by this estimate; "
+                "this restricts the denominator to eligible ages but does not adjust for "
+                "differences in age structure"
+            ),
+            "rate_column": f"{count_col}_rate",
+            "rate_unit": (
+                "modelled share of the eligible resident population, rounded to 8 decimal "
+                "places; age-restricted, not age-standardised"
+            ),
+            "first_year": first_year,
+            "last_year": 2025,
+            "source": "NHS Digital / NHS England QOF; ONS age-band population",
+            "availability_and_adjustments": "; ".join(notes),
+        })
     rows.extend([
         {
             **common,
@@ -1545,6 +1754,7 @@ for lv in LEVELS:
                          if any(c.startswith(f"{code}_") for code in DROP_HEALTH)]
             tidy = tidy.drop(columns=drop_cols)
             _validate_health_quality_columns(tidy, member_name)
+            _validate_qof_health_metrics(tidy, member_name)
             tidy = tidy.drop(columns=list(HEALTH_SUPPORT_COLUMNS))
             indicator_columns = HEALTH_QUALITY_COLUMNS
         lead = [c for c in ("code", "name", "year", "pop") if c in tidy.columns]
@@ -1722,6 +1932,20 @@ def domain_metrics():
                 "an unvalidated local reversal"
             )
         hea.append(metric)
+    for metric_key, label in QOF_HEALTH:
+        code = metric_key.removesuffix("_qof")
+        metadata = QOF_ELIGIBLE_HEALTH[code]
+        hea.append({
+            "key": metric_key,
+            "label": label,
+            "fmt": "pct",
+            "definition": (
+                f"Age-restricted share of {metadata['eligible_population']}; an alternative "
+                f"denominator for the same {dict(HEALTH)[code]} estimate, not an additional "
+                "condition and not age-standardised. Do not sum or average it with the "
+                "all-ages metric."
+            ),
+        })
     return {"employment": emp, "crime": cri, "health": hea}
 
 
@@ -1877,14 +2101,14 @@ def build_record(lv, code):
         "pop": [],
         "diseases": {
             code_: {"rate": [], "afflicted": [], "afflicted_pop": []}
-            for code_, _ in HEALTH
+            for code_, _ in PUBLISHED_HEALTH_METRICS
         },
     }
     for yr in YEARS:
         r = DD[lv]["health"].get(yr, {}).get(code)
         if r is not None:
             hea["pop"].append(int(r["pop"]) if not pd.isna(r["pop"]) else None)
-            for code_, _ in HEALTH:
+            for code_, _ in PUBLISHED_HEALTH_METRICS:
                 rate_col = f"{code_}_afflicted_rate"
                 count_col = f"{code_}_afflicted"
                 covered_col = f"{count_col}{COUNT_POP_SUFFIX}"
@@ -1896,7 +2120,7 @@ def build_record(lv, code):
                 )
         else:
             hea["pop"].append(None)
-            for code_, _ in HEALTH:
+            for code_, _ in PUBLISHED_HEALTH_METRICS:
                 hea["diseases"][code_]["rate"].append(None)
                 hea["diseases"][code_]["afflicted"].append(None)
                 hea["diseases"][code_]["afflicted_pop"].append(None)
