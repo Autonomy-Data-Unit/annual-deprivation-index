@@ -34,7 +34,7 @@ from scipy import stats
 # Deliberately hand-set for each materially new dataset publication. Deriving this
 # from the build clock would make a later rebuild look like a new data release, while
 # silently collapsing multiple same-day revisions onto the same identifier.
-DATASET_RELEASE = "2026-09-03"
+DATASET_RELEASE = "2026-09-04"
 
 
 def _validate_dataset_release(value: str) -> None:

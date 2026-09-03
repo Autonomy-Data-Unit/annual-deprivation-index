@@ -1,5 +1,85 @@
 # Changelog
 
+## 2026-09-04 — QOF eligible-age health rates
+
+This release adds a second, QOF-comparable rate for nine health conditions without changing any existing column. An analysis that used only the existing whole-population columns still holds and does not need to be rerun unless the analyst chooses the new definition.
+
+**How to identify the corrected release.** Dataset release `2026-09-04` archives contain `*_qof_afflicted`, `*_qof_afflicted_pop`, and `*_qof_afflicted_rate`; an earlier archive without these columns remains valid for existing measures but does not contain the new eligible-age views.
+
+### The decisions that can change an existing result
+
+- **Existing analysis remains valid.** Every previous column is untouched and the original 2014--2025 whole-population series is unbroken by this additive release.
+- **Comparison with NHS/QOF prevalence should use the new rate.** Switching to `*_qof_afflicted_rate` changes the denominator and requires affected analysis, rankings and models to be rerun.
+- **The two rates are not interchangeable.** The original rate is a share of all residents; the new rate is a share of eligible-age residents and is age-restricted, not age-standardised.
+
+### What is new
+
+QOF does not measure every condition against everybody on a GP practice list. For nine conditions it divides the disease register by an eligible-age list: asthma 6+, rheumatoid arthritis 16+, diabetes 17+, CKD/depression/epilepsy/non-diabetic hyperglycaemia/obesity 18+, and osteoporosis 50+ (with obesity using 16+ in output year 2015). The earlier ADI rate deliberately divided those registers by all residents to express whole-population burden. The new rate uses the eligible resident population instead, making it comparable in definition with QOF's published prevalence.
+
+Each affected condition now has an additional three-column group. For diabetes, for example:
+
+```text
+DM_qof_afflicted       modelled eligible-age resident count
+DM_qof_afflicted_pop   covered resident population aged 17+
+DM_qof_afflicted_rate  DM_qof_afflicted / DM_qof_afflicted_pop
+```
+
+The original `DM_afflicted`, `DM_afflicted_pop`, and `DM_afflicted_rate` columns remain unchanged. The two triples are alternative representations of the same disease estimate and must not be added or averaged.
+
+Exact eligible-age resident populations come from the single-year-of-age dimension of the same Nomis datasets already used for ADI population: NM_2010_1 for LSOA 2011 and NM_2014_1 for LSOA 2021. The pipeline composes 6+, 16+, 17+, 18+, and 50+ bands from published ages and applies the same geography conversion, publication-year population and 2025 carry-forward policy as the all-age data.
+
+### Availability
+
+| Output years | Available QOF eligible-age conditions |
+|---|---|
+| 2014 | None: QOF 2013-14 supplied no distinct eligible-age denominator, so all nine new triples are blank |
+| 2015--2020 | CKD, DEP, DM, EP, OB, OST, RA (7 conditions) |
+| 2021--2025 | AST, CKD, DEP, DM, EP, NDH, OB, OST, RA (9 conditions) |
+
+AST remains blank until QOF changed its denominator from all ages to 6+ in 2020-21; NDH begins when QOF introduced that register in the same year. These are intentional source-definition boundaries, not missing data. The new columns do not break or overwrite the original 2014--2025 series.
+
+### The two rates are not interchangeable
+
+The original rate is a share of **all residents**. The new QOF rate is a share of the **eligible-age resident population**. For England osteoporosis in 2024-25:
+
+| Measure | England rate |
+|---|---:|
+| Existing whole-population rate | 0.450% |
+| New resident 50+ rate | 1.201% |
+| NHS England published 50+ prevalence | 1.198% |
+
+The new value is 2.67 times the all-resident value and is within 0.26% of the NHS published rate (ratio 1.0026). All nine new England rates for 2024-25 are within approximately 0.3--2% of NHS published prevalence. This does not make the old value erroneous: it answers a different question. Analysts must choose the denominator that matches their interpretation and must label it.
+
+**Age-restricted is not age-standardised.** The new denominator excludes residents below the eligibility cut-off; it does not reweight the eligible residents to a common age distribution. The new rate is not “adjusted for age” and does not support an inference that differences between places or years are independent of age structure.
+
+### Deprivation-gradient diagnostic
+
+We independently recomputed Pearson correlations at LSOA level between QOF 2022-23 health rates (output year 2023) and the calendar-year 2023 Claimant Count rate across 33,749 LSOAs:
+
+| Condition | All-resident rate | Eligible-age rate |
+|---|---:|---:|
+| DM | 0.229 | 0.284 |
+| OB | 0.074 | 0.121 |
+| OST | -0.273 | -0.200 |
+| EP | -0.059 | -0.012 |
+| DEP | -0.060 | -0.020 |
+| NDH | -0.062 | -0.026 |
+| RA | -0.314 | -0.286 |
+| CKD | -0.256 | -0.235 |
+| AST | -0.269 | -0.250 |
+
+All nine associations moved in the same direction: more positive, or less negative, when the ineligible population was removed. The individual changes are modest, but their consistency shows that the all-age denominator attenuated the ADI health--deprivation association in this 2022-23 diagnostic. It does not show that the eligible-age rate is age-standardised or establish a causal relationship.
+
+### What council analysts should do
+
+1. **If an existing analysis uses only the original columns, no recalculation is required.** Preserve its whole-population interpretation; the earlier 2014--2025 values have not changed.
+2. **Use the new `*_qof_afflicted_rate` when comparing with NHS/QOF prevalence** or when the analytical question is prevalence among people eligible for that QOF register.
+3. **Use each new rate's adjacent `*_qof_afflicted_pop` denominator.** It is an eligible-age population and is deliberately different from the row's all-age `pop`.
+4. **Rerun rankings, correlations and models if you switch definitions.** Osteoporosis changes by a factor of 2.67 nationally, and local changes also reflect population age structure.
+5. **Do not splice across unavailable years.** The eligible-age view starts in 2015 for seven conditions and 2021 for AST and NDH; 2014 blanks must not be imputed from the all-age rate.
+6. **Describe the measure as age-restricted, never age-standardised or age-adjusted.**
+
+
 ## 2026-09-02 — corrected 2014–2025 data release
 
 This is a **breaking historical revision**, not an append-only annual update. Replace earlier extracts and rerun existing analysis. The comparison below uses commit `b152edf` as the pre-run baseline.

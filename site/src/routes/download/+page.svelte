@@ -43,9 +43,17 @@
 
   <h2>Before you use it</h2>
   <ul class="measure">
-    <li><strong>The population base is all ages.</strong> <code>pop</code> is the ONS mid-year estimate
-      (Nomis NM_2014_1, 2021 LSOA vintage) for that year — not an adult-only or working-age base. Every
-      <code>_rate</code> column is that row's count divided by that row's <code>pop</code>.</li>
+    <li><strong>Use each rate's own population.</strong> <code>pop</code> is the all-age ONS mid-year estimate
+      (Nomis NM_2014_1, 2021 LSOA vintage) for that row. Every metric's <code>_rate</code> is its count
+      divided by the adjacent metric-specific <code>_pop</code> column. That denominator usually represents
+      covered residents of all ages; the new <code>*_qof_afflicted_rate</code> columns instead use the
+      condition's covered eligible-age population. Do not substitute the row's <code>pop</code>.</li>
+    <li><strong>Two health rates answer different questions.</strong> The existing <code>*_afflicted_rate</code>
+      remains the estimated share of all residents and is unchanged. For nine QOF conditions,
+      <code>*_qof_afflicted_rate</code> is an additional, QOF-comparable share of residents in the eligible
+      age range. It is age-restricted, <em>not age-standardised</em>: it does not adjust places to a common
+      age structure. All nine new triples are blank in 2014; seven begin in 2015, while asthma and
+      non-diabetic hyperglycaemia begin in 2021. Never add or average the two representations.</li>
     <li><strong>Health years are offset by one.</strong> QOF runs April–March and is labelled by the year
       it ends, so health <em>2021</em> covers April 2020–March 2021. Employment and crime are calendar years.</li>
     <li><strong>Gaps are empty cells, never zeros.</strong> Crime coverage varies by year and police force:
@@ -57,8 +65,9 @@
       changed during the pandemic, and NHS Digital warns that indicator data may be inaccurate. In the current
       England series, 10 of 20 comparable condition rates rose and 10 fell; obesity fell sharply while depression
       rose. Do not use 2021 as a like-for-like trend point.</li>
-    <li><strong>Smoking is not included</strong>, at any year after 2013-14 — NHS Digital stopped publishing
-      it as a QOF prevalence group, along with hypothyroidism and CVD primary prevention.</li>
+    <li><strong>Smoking and hypothyroidism are not included.</strong> They were one-year QOF groups and are
+      omitted rather than shown as zero. Historical CVD primary prevention is included for 2014–2020 and
+      blank after the register was withdrawn.</li>
   </ul>
   <p class="measure">The full detail is on the <a href="{base}/about">methodology page</a>.</p>
 

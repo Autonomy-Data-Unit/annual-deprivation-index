@@ -51,7 +51,7 @@ Two data sources are combined:
 **QOF (Quality and Outcomes Framework):**
 - **Source:** [NHS Digital](https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data)
 - **Download:** Scrape publication pages with `httpx` + `BeautifulSoup` (server-side rendered, no JS). Download CSV ZIP files.
-- **Content:** Per-GP-practice disease register counts and list populations. The public release has 22 health metrics: 21 canonical disease groups (AF, AST, CAN, CHD, CKD, COPD, DEM, DEP, DM, EP, HF, HYP, LD, MH, NDH, OB, OST, PAD, PC, RA, STIA) plus historical CVDPP for output years 2014-2020. SMOK and THY remain intermediate-only one-year groups. Disease codes change across years (see `config/qof_schemas.toml`).
+- **Content:** Per-GP-practice disease register counts and list populations. The public release has 22 conditions: 21 canonical disease groups (AF, AST, CAN, CHD, CKD, COPD, DEM, DEP, DM, EP, HF, HYP, LD, MH, NDH, OB, OST, PAD, PC, RA, STIA) plus historical CVDPP for output years 2014-2020. SMOK and THY remain intermediate-only one-year groups. Nine conditions additionally expose an additive QOF eligible-age metric where the source defines a distinct denominator; this does not replace the existing all-age metric. Disease codes and denominator bands change across years (see `config/qof_schemas.toml`).
 
 **GP-LSOA Patient Registrations:**
 - **Source:** [NHS Digital Patients Registered at a GP Practice](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice)
@@ -61,7 +61,7 @@ Two data sources are combined:
 
 ### Reference Data
 
-- **LSOA populations:** Nomis REST API. Both LSOA 2011 (`NM_2010_1`, 2011-2020) and LSOA 2021 (`NM_2014_1`, 2011-2024). The 2020 LSOA 2011 file is always downloaded as a fallback.
+- **LSOA populations:** Nomis REST API. Both LSOA 2011 (`NM_2010_1`, 2011-2020) and LSOA 2021 (`NM_2014_1`, 2011-2024). Each dataset's single-year-of-age dimension is also queried for exact 6+, 16+, 17+, 18+, and 50+ resident bands used by QOF; Nomis composes them server-side. The 2020 LSOA 2011 files are always available for source-vintage processing, and 2025 LSOA 2021 all-age and band values explicitly carry 2024 forward.
 - **LSOA boundaries:** ONS ArcGIS REST API. Generalised Clipped (BGC) version, 35,672 LSOA 2021 features.
 - **Geographic lookups:** ONS ArcGIS REST API. `LSOA21_WD25_LAD25_EW_LU_v2` (LSOA to LAD), `LAD25_RGN25_EN_LU_v2` (LAD to Region).
 - **LSOA crosswalk:** ONS `LSOA11_LSOA21_LAD22_EW_LU_v5` (exact-fit with change indicators U/S/M/X).
@@ -104,26 +104,26 @@ All intermediate processing outputs are in **LSOA 2011** vintage.
 
 **`process_health`**:
 
-1. Normalise QOF data using `config/qof_schemas.toml`; genuinely missing practice registers remain missing rather than becoming zero.
+1. Normalise QOF data using `config/qof_schemas.toml`; genuinely missing practice registers remain missing rather than becoming zero. Retain the all-age practice list for the original ADI rate and the row's own eligible-age list for QOF-comparable rates. The 2014-15 age mappings are pinned in config because that source has sizes but no list-type labels; 2013-14 has no distinct eligible-age denominator.
 2. Load GP-LSOA registrations for the matching April edition.
-3. For each LSOA and disease, keep practices with a usable QOF register and all-age list size, renormalise patient weights over those **covered practices**, and compute their weighted register share. The covered practices need not contain all of the LSOA's registrations. A disease estimate with less than 80% registration coverage is withheld.
-4. Use the all-age practice list for every group. For AST (6+), RA (16+), DM (17+), CKD/DEP/EP/NDH/OB (18+) and OST (50+), this produces a whole-population burden rate rather than QOF's official age-restricted prevalence; between-area differences partly reflect age structure.
+3. For each LSOA and disease, keep practices with a usable QOF register and denominator, renormalise patient weights over those **covered practices**, and compute the weighted register share. A disease estimate with less than 80% registration coverage is withheld.
+4. Preserve the original all-age rate. Add `{CODE}_qof_prevalence_rate` for QOF's eligible-age denominator: CKD/DEP/DM/EP/OB/OST/RA from output year 2015, then AST and NDH as well from 2021. OB uses 16+ in 2015 and 18+ thereafter; AST uses 6+, RA 16+, DM 17+, CKD/DEP/EP/NDH/OB 18+, and OST 50+. All eligible-age columns are blank in 2014 because QOF 2013-14 provides no distinct denominator.
 5. Reject estimated rates outside [0, 1] to missing.
-6. Fill only interior gaps of at most two years by linear interpolation. Leading, trailing, and longer gaps remain missing; there is no endpoint extrapolation.
-7. Derive modelled resident `afflicted` estimates as `rate * pop`; these are not observed QOF register counts and are generally lower because QOF practice lists exceed ONS resident population.
+6. Fill only interior gaps of at most two years by linear interpolation, independently for each denominator view. Leading, trailing, and longer gaps remain missing; there is no endpoint extrapolation.
+7. Derive original modelled resident `afflicted` estimates as all-age `rate * pop`. The eligible-age count is completed in `aggregate` against the corresponding ONS resident age band. Neither representation is an observed QOF register count.
 
-Intermediate output: `LSOA11CD`, `pop`, 24 source-group rate/afflicted pairs (21 canonical groups plus CVDPP/SMOK/THY), `qof_coverage`, and `registration_coverage`. There is no `list_pop` output column. The site/download release excludes SMOK and THY and publishes 22 health metrics.
+Intermediate output: `LSOA11CD`, `pop`, 24 source-group all-age rate/afflicted pairs (21 canonical groups plus CVDPP/SMOK/THY), available eligible-age QOF rate columns, `qof_coverage`, and `registration_coverage`. The site/download release excludes SMOK and THY and publishes 22 conditions plus nine additive eligible-age representations.
 
 ### Aggregate Node
 
 1. **Build a crosswalk per output year:** LSOA 2011 → LSOA 2021 using exact-fit lookup. Unchanged (U) and merged (M) rows have weight 1.0; split (S) weights use that publication year's LSOA 2021 population shares; complex (X) rows are excluded.
 2. **Apply the crosswalk:** Disaggregate absolute counts and intermediate population, reaggregate to LSOA 2021 with `min_count=1`, and never disaggregate rates directly.
-3. **Reset target population:** Replace crosswalked LSOA 2011 population with the same year's LSOA 2021 population. Employment/crime counts remain fixed; health counts are re-derived so prevalence remains fixed.
-4. **Add metric-specific denominators:** `pop` is the whole area's all-age ONS population. Every count carries `<count>_pop`, the population of LSOAs where that metric exists, and `<count>_rate = <count> / <count>_pop`.
-5. **Aggregate:** Sum counts, `pop`, and metric-specific populations from LSOA to LAD (296), Region (9), and England (1), then recompute rates from metric-specific denominators.
+3. **Reset target populations:** Replace crosswalked LSOA 2011 populations with the same year's LSOA 2021 all-age and QOF age-band populations. Employment/crime counts remain fixed; each health count is re-derived so its all-age or eligible-age rate remains fixed.
+4. **Add metric-specific denominators:** `pop` is the whole area's all-age ONS population. Every count carries `<count>_pop`, the population that actually denominates that metric over LSOAs where it exists. Existing metrics use all-age population; `{CODE}_qof_afflicted_pop` uses the condition's eligible-age band. Every rate is `<count> / <count>_pop`.
+5. **Aggregate:** Sum counts, `pop`, and each metric's mapped denominator from LSOA to LAD (296), Region (9), and England (1), then recompute rates from those denominators.
 6. **Output:** `store/outputs/{run_name}/{lsoa,lad,region,england}/{domain}/{file}.csv`.
 
-The site/download publishing step then rejects eight implausible epilepsy LSOA values in 2016 and seven heart-failure values in 2021 to missing, rebuilds higher levels from LSOAs, interpolates the known DEP 2024 and OST 2015 basis-change years only where both anchors exist, retains CVDPP for its 2014-2020 source window, and excludes the one-year SMOK/THY groups from the published 22-metric release.
+The site/download publishing step rejects eight implausible epilepsy LSOA values in 2016 and seven heart-failure values in 2021 to missing, rebuilds higher levels from LSOAs, applies the known DEP 2024 and OST 2015 corrections to both denominator views, retains CVDPP for its 2014-2020 source window, and excludes the one-year SMOK/THY groups. Existing all-age columns retain their definitions and values; the new QOF eligible-age triples are additive.
 
 ### Storage Convention
 
@@ -240,7 +240,7 @@ Domain processors output in **LSOA 2011**. For every output year, `aggregate` bu
 | Merged (M) | 239 → 119 | Sum values, weight = 1.0 |
 | Complex (X) | 6 → 6 | Excluded |
 
-Absolute counts and intermediate population are crosswalked separately; rates are never disaggregated. After the crosswalk, `pop` is reset to the output year's target-vintage ONS population. Each count then receives a `<count>_pop` coverage denominator, and its rate is recomputed as `count / <count>_pop`. At higher levels, counts and their coverage populations are summed together, so missing LSOAs contribute to neither side of a rate.
+Absolute counts and their associated populations are crosswalked separately; rates are never disaggregated. After the crosswalk, `pop` and the eligible-age band populations are reset to the output year's target-vintage ONS values. Each count then receives its mapped `<count>_pop` denominator and its rate is recomputed as `count / <count>_pop`. Existing employment, crime and all-age health metrics use all-age population over covered LSOAs; `{CODE}_qof_afflicted` uses the corresponding eligible-age population. At higher levels, counts and their own populations are summed together, so missing LSOAs contribute to neither side of a rate.
 
 The six complex target LSOAs are absent, leaving 33,749 of 33,755 areas. Their combined population is 8,929-9,279 (about 0.015%-0.017% of England), exactly explaining the published national population gap. The affected LADs are St Albans, Stevenage, Welwyn Hatfield, East Hertfordshire, Gateshead and Northumberland; Stevenage's 2021 denominator is 1.90% below its complete ONS total.
 
@@ -257,9 +257,17 @@ Raw QOF data has different column schemas across years. The mapping is config-dr
 
 Pre-2013 (Excel format) is not supported; the GP-LSOA data doesn't exist for those years anyway.
 
+## QOF Eligible-Age Metrics
+
+The original `{CODE}_afflicted`, `{CODE}_afflicted_pop`, and `{CODE}_afflicted_rate` columns remain unchanged whole-population measures. For the nine conditions that QOF measures against an age-restricted list, final outputs also carry `{CODE}_qof_afflicted`, `{CODE}_qof_afflicted_pop`, and `{CODE}_qof_afflicted_rate`. The second count is modelled against the matching ONS resident age band and is an alternative representation of the same condition, not an additional disease count.
+
+Availability is intentionally 0/7/9: every QOF eligible-age triple is blank in output year 2014; CKD, DEP, DM, EP, OB, OST and RA are present from 2015; AST and NDH join them from 2021. The new series begins only when QOF supplies a distinct eligible-age denominator, so AST is not backfilled while QOF still used `TOTAL`, and NDH is not backfilled before the register existed.
+
+These rates are **age-restricted, not age-standardised**. They report the modelled share of residents inside the eligible age range and do not reweight areas to a common age structure. Never describe them as adjusted for age, and never add or average the all-age and QOF representations.
+
 ## Conventions
 
 - **No silent fallbacks:** Use `d["key"]`, never `.get(key, default)`.
 - **Node variables:** Defaults in `run_defs.toml`, types in `netrun.json`. Access via `ctx.vars["var_name"]`.
 - **Idempotent nodes:** All fetch and process nodes skip work if output already exists.
-- **Counts + populations:** Final outputs carry every count, the whole-area `pop`, the count's metric-specific `<count>_pop`, and the reproducible rate `count / <count>_pop`.
+- **Counts + populations:** Final outputs carry every count, the whole-area all-age `pop`, the count's mapped `<count>_pop`, and the reproducible rate `count / <count>_pop`. Do not assume `<count>_pop == pop`: QOF eligible-age metrics deliberately use their resident age-band population.
