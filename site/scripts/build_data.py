@@ -24,11 +24,38 @@ import stat
 import tempfile
 import time
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy import stats
+
+# Deliberately hand-set for each materially new dataset publication. Deriving this
+# from the build clock would make a later rebuild look like a new data release, while
+# silently collapsing multiple same-day revisions onto the same identifier.
+DATASET_RELEASE = "2026-09-03"
+
+
+def _validate_dataset_release(value: str) -> None:
+    """Require an explicit canonical ISO date before reading or publishing data."""
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(
+            "Set DATASET_RELEASE explicitly to the dataset publication date (YYYY-MM-DD)"
+        )
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as exc:
+        raise RuntimeError(
+            "DATASET_RELEASE must be an explicit date in YYYY-MM-DD format"
+        ) from exc
+    if parsed.isoformat() != value:
+        raise RuntimeError(
+            "DATASET_RELEASE must use canonical zero-padded YYYY-MM-DD format"
+        )
+
+
+_validate_dataset_release(DATASET_RELEASE)
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DEF = ROOT / "store" / "outputs" / "default"
@@ -60,6 +87,11 @@ atexit.register(_remove_staging)
 
 YEARS = list(range(2014, 2026))  # 2014..2025
 LEVELS = ["england", "region", "lad", "lsoa"]
+
+
+def _bundle_filename(level: str) -> str:
+    return f"adi-{level}-{DATASET_RELEASE}.zip"
+
 
 CRIME_TYPES = [
     ("Anti-social behaviour", "anti_social"),
@@ -237,6 +269,11 @@ def _validate_staged_outputs() -> None:
 
     with (WEB / "manifest.json").open() as f:
         staged_manifest = json.load(f)
+    if staged_manifest.get("release") != DATASET_RELEASE:
+        raise RuntimeError(
+            "Staged manifest has the wrong dataset release: "
+            f"{staged_manifest.get('release')!r}"
+        )
     expected_maps = {
         Path("map") / level / domain / f"{metric['key']}.json"
         for level in staged_manifest["levels"]
@@ -252,7 +289,7 @@ def _validate_staged_outputs() -> None:
         )
 
     staged_downloads = _files_below(DOWNLOADS)
-    expected_downloads = {Path(f"adi-{level}.zip") for level in LEVELS}
+    expected_downloads = {Path(_bundle_filename(level)) for level in LEVELS}
     if set(staged_downloads) != expected_downloads:
         raise RuntimeError(
             "Staged download set is incomplete; "
@@ -261,6 +298,11 @@ def _validate_staged_outputs() -> None:
         )
     with (WEB / "downloads.json").open() as f:
         download_index = json.load(f)
+    if download_index.get("release") != DATASET_RELEASE:
+        raise RuntimeError(
+            "Staged download index has the wrong dataset release: "
+            f"{download_index.get('release')!r}"
+        )
     download_metadata = {entry["level"]: entry for entry in download_index["bundles"]}
     if set(download_metadata) != set(LEVELS):
         raise RuntimeError(
@@ -268,7 +310,7 @@ def _validate_staged_outputs() -> None:
             f"found={sorted(download_metadata)}, expected={sorted(LEVELS)}"
         )
     for level in LEVELS:
-        zip_path = DOWNLOADS / f"adi-{level}.zip"
+        zip_path = DOWNLOADS / _bundle_filename(level)
         prefix = f"adi-{level}/"
         expected_members = {
             f"{prefix}README.txt",
@@ -318,10 +360,13 @@ def _validate_staged_outputs() -> None:
             readme = archive.read(f"{prefix}README.txt").decode("utf-8")
             expected_rows = expected_areas * len(YEARS)
             if (
-                f"{expected_rows:,} data" not in readme
+                f"Dataset release: {DATASET_RELEASE}" not in readme
+                or f"{expected_rows:,} data" not in readme
                 or f"{expected_areas:,} unique areas x {len(YEARS)} years" not in readme
             ):
-                raise RuntimeError(f"README row claims are stale in {zip_path.name}")
+                raise RuntimeError(
+                    f"README release or row claims are stale in {zip_path.name}"
+                )
 
             geography_member = f"{prefix}adi-{level}-geography.csv"
             with archive.open(geography_member) as geography_csv:
@@ -358,6 +403,19 @@ def _validate_staged_outputs() -> None:
                 or (dictionary["column_role"] == "metric").sum() != expected_metrics
             ):
                 raise RuntimeError(f"Metric dictionary is incomplete in {zip_path.name}")
+            dictionary_releases = (
+                set(dictionary["release"].dropna().astype(str))
+                if "release" in dictionary
+                else set()
+            )
+            if (
+                dictionary_releases != {DATASET_RELEASE}
+                or dictionary["release"].isna().any()
+            ):
+                raise RuntimeError(
+                    f"Dataset release is missing or inconsistent in {dictionary_member}: "
+                    f"found={sorted(dictionary_releases)}"
+                )
 
             quality_dictionary = dictionary[
                 dictionary["column_role"] == "quality_indicator"
@@ -801,6 +859,7 @@ print("Building download bundle...")
 DL_README = """Annual Deprivation Index (ADI) — {level_label}
 Autonomy Data Unit, Autonomy Institute
 https://adi.apps.autonomy.work
+Dataset release: {release}
 
 CONTENTS
   adi-{level}-employment.csv       Claimant Count, Nomis NM_162_1
@@ -1164,6 +1223,7 @@ def _serialise_download_table(
 
 def _data_dictionary(level: str) -> pd.DataFrame:
     common = {
+        "release": DATASET_RELEASE,
         "geography_level": level,
         "column_role": "metric",
         "coverage_population_definition": (
@@ -1387,7 +1447,7 @@ def _data_dictionary(level: str) -> pd.DataFrame:
         },
     ])
     columns = [
-        "domain", "metric", "label", "geography_level", "column_role",
+        "release", "domain", "metric", "label", "geography_level", "column_role",
         "count_column", "count_unit", "count_definition",
         "coverage_population_column", "coverage_population_definition",
         "rate_column", "rate_unit", "indicator_column", "indicator_unit",
@@ -1512,7 +1572,8 @@ for lv in LEVELS:
     if not members:
         continue
     members["README.txt"] = DL_README.format(
-        level=lv, level_label=_LEVEL_LABELS[lv], generated=_generated,
+        level=lv, level_label=_LEVEL_LABELS[lv], release=DATASET_RELEASE,
+        generated=_generated,
         area_count=len(codes_by_level[lv]), row_count=len(codes_by_level[lv]) * len(YEARS),
         health_coverage_gaps=_health_coverage_gap_summary(),
         crime_gap_table=_crime_gap_table(), health_gap_table=_health_gap_table(),
@@ -1523,7 +1584,7 @@ for lv in LEVELS:
     members[f"adi-{lv}-data-dictionary.csv"] = _data_dictionary(lv).to_csv(index=False)
     members[f"adi-{lv}-geography.csv"] = _geography_dictionary(lv).to_csv(index=False)
 
-    zip_path = DOWNLOADS / f"adi-{lv}.zip"
+    zip_path = DOWNLOADS / _bundle_filename(lv)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name, payload in members.items():
             _write_public_zip_member(z, f"adi-{lv}/{name}", payload)
@@ -1549,9 +1610,16 @@ for lv in LEVELS:
 # which are only canonical once codes_by_level exists.
 for _entry in _bundle_index:
     _entry["areas"] = len(codes_by_level[_entry["level"]])
-write_json(WEB / "downloads.json", {"years": [YEARS[0], YEARS[-1]],
-                                    "generated": _generated,
-                                    "bundles": _bundle_index}, indent=1)
+write_json(
+    WEB / "downloads.json",
+    {
+        "release": DATASET_RELEASE,
+        "years": [YEARS[0], YEARS[-1]],
+        "generated": _generated,
+        "bundles": _bundle_index,
+    },
+    indent=1,
+)
 print(f"  download index: {len(_bundle_index)} bundles")
 
 # ---------------------------------------------------------------- hierarchy
@@ -1706,6 +1774,7 @@ for domain, mlist in METRICS.items():
 
 # ---------------------------------------------------------------- manifest
 manifest = {
+    "release": DATASET_RELEASE,
     "years": YEARS,
     "levels": LEVELS,
     "level_labels": {"england": "England", "region": "Region", "lad": "Local authority", "lsoa": "Neighbourhood (LSOA)"},
