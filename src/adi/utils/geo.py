@@ -14,6 +14,7 @@ def covered_population(
     df: pd.DataFrame,
     count_cols: list[str],
     pop_col: str,
+    count_pops: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Per row and per count column, the population that count actually covers.
 
@@ -36,23 +37,45 @@ def covered_population(
     area, whatever was or was not measured in it. Dividing `{col}_pop` by `pop`
     is how a reader sees the coverage.
 
+    `count_pops` extends this from "a different coverage subset of one population"
+    to "a genuinely different population". QOF measures nine of its registers
+    against an age-restricted list -- osteoporosis against 50+, depression against
+    18+ -- so those counts have a different DENOMINATOR, not merely a different
+    mask over the same one. A count named there takes its population from the
+    column it names instead of `pop_col`, and everything downstream is unchanged:
+    the same masking, the same summation, the same `{col}_rate == {col} /
+    {col}_pop` identity at every level. Counts absent from the mapping keep
+    `pop_col`, so the existing metrics are untouched.
+
     Args:
-        df: Rows carrying the count columns and `pop_col`.
+        df: Rows carrying the count columns, `pop_col`, and any population column
+            named in `count_pops`.
         count_cols: Count columns to derive a denominator for.
-        pop_col: The area's full population column.
+        pop_col: The area's full population column, and the default denominator.
+        count_pops: Optional `{count_col: population_col}` for counts measured
+            against a population other than `pop_col`.
 
     Returns:
         DataFrame aligned to `df.index`, one `{col}{COVERED_POP_SUFFIX}` column
         per entry in `count_cols`.
     """
+    count_pops = count_pops or {}
     clashes = [c for c in count_cols if f"{c}{COVERED_POP_SUFFIX}" in df.columns]
     if clashes:
         raise ValueError(
             f"Covered-population columns would overwrite existing ones: {clashes}. "
             f"Rename the count column or the {COVERED_POP_SUFFIX!r} suffix."
         )
+    unknown = {c: p for c, p in count_pops.items()
+               if c in count_cols and p not in df.columns}
+    if unknown:
+        raise ValueError(
+            f"These counts name a population column that is not present: {unknown}. "
+            f"A count cannot be published against a denominator we do not have."
+        )
     return pd.DataFrame(
-        {f"{c}{COVERED_POP_SUFFIX}": df[pop_col].where(df[c].notna()) for c in count_cols},
+        {f"{c}{COVERED_POP_SUFFIX}": df[count_pops.get(c, pop_col)].where(df[c].notna())
+         for c in count_cols},
         index=df.index,
     )
 
@@ -152,6 +175,7 @@ def apply_crosswalk(
     count_cols: list[str],
     pop_col: str,
     lsoa_col: str = "LSOA11CD",
+    extra_pop_cols: list[str] | None = None,
 ) -> pd.DataFrame:
     """Apply crosswalk to convert LSOA 2011 data to LSOA 2021.
 
@@ -159,12 +183,27 @@ def apply_crosswalk(
     reaggregates to LSOA 2021. Rates are recomputed from the
     disaggregated numerators and denominators.
 
+    `extra_pop_cols` are further absolute head counts to carry across -- the
+    age-band resident populations an age-restricted metric is measured against.
+    They are disaggregated and reaggregated exactly like a count, because that is
+    what they are; they are listed separately only because they are denominators
+    rather than metrics, so nothing downstream should give them a rate.
+
+    Carrying them matters most for a MERGE, where two LSOA 2011 areas become one
+    LSOA 2021 area and the merged rate is `sum(count) / sum(denominator)`. Weight
+    that by the all-ages population instead of the band population and the merged
+    rate is wrong by the difference in the two areas' age structure: measured on
+    2016-17 osteoporosis that reaches 57% on one merged area, against a median of
+    0.4%. For unchanged and split areas both scale by the same weight and cancel,
+    so it is merges alone that need this -- but they need it badly.
+
     Args:
         df: Source data with LSOA 2011 codes.
         crosswalk: Crosswalk table from build_crosswalk().
         count_cols: Column names containing absolute counts to disaggregate.
         pop_col: Column name for population (also disaggregated).
         lsoa_col: Column name for LSOA codes in df.
+        extra_pop_cols: Further absolute population columns to carry across.
 
     Returns:
         DataFrame with LSOA 2021 codes and converted values.
@@ -173,7 +212,7 @@ def apply_crosswalk(
     merged = df.merge(crosswalk, left_on=lsoa_col, right_on="LSOA11CD", how="inner")
 
     # Disaggregate: multiply counts and population by weight
-    cols_to_weight = count_cols + [pop_col]
+    cols_to_weight = count_cols + [pop_col] + list(extra_pop_cols or [])
     for col in cols_to_weight:
         merged[col] = merged[col] * merged["weight"]
 
@@ -205,6 +244,7 @@ def aggregate_to_geography(
     geo_name_col: str,
     count_cols: list[str],
     pop_col: str,
+    count_pops: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """Aggregate LSOA-level data to a higher geography level.
 
@@ -250,7 +290,13 @@ def aggregate_to_geography(
     # one NaN mask by construction, so they are summed over the same areas and
     # the rate is right whether the group was fully measured, partly measured, or
     # not at all.
-    covered = covered_population(merged, count_cols, pop_col)
+    #
+    # This is also what makes an age-restricted metric aggregate correctly. Its
+    # `{col}_pop` is the eligible population, not the resident one, so summing the
+    # pair and dividing weights each LSOA by the population that metric is actually
+    # measured against. Weighting osteoporosis by resident population instead would
+    # be wrong at every level above LSOA while LSOA itself looked fine.
+    covered = covered_population(merged, count_cols, pop_col, count_pops)
     agg_cols = count_cols + [pop_col] + list(covered.columns)
     result = (
         pd.concat([merged[[geo_code_col, geo_name_col] + count_cols + [pop_col]], covered], axis=1)
@@ -291,3 +337,87 @@ def load_lsoa21_population(pop_dir: Path, year: int) -> pd.DataFrame:
     pop = pd.read_csv(path)
     pop = pop.rename(columns={"GEOGRAPHY_CODE": "LSOA21CD", "OBS_VALUE": "pop"})
     return pop[["LSOA21CD", "pop"]]
+
+
+#: Prefix for an age-band resident population column carried through aggregation.
+#: `pop` alone stays the all-ages estimate; `pop_50OV` is the 50-and-over one.
+BAND_POP_PREFIX = "pop_"
+
+
+def band_pop_col(band: str) -> str:
+    """Column name for an age band's resident population."""
+    return f"{BAND_POP_PREFIX}{band}"
+
+
+def _load_age_bands(path: Path, bands: list[str], code_col: str) -> pd.DataFrame:
+    """Pivot one Nomis age-band file to one column per band.
+
+    The file is long -- one row per (LSOA, band) -- and carries `All Ages` beside
+    the bands so it can be reconciled against the plain population file.
+    """
+    raw = pd.read_csv(path, usecols=["GEOGRAPHY_CODE", "C_AGE_NAME", "OBS_VALUE"])
+    wide = raw.pivot_table(index="GEOGRAPHY_CODE", columns="C_AGE_NAME",
+                           values="OBS_VALUE", aggfunc="max")
+    wide.columns.name = None
+    missing = [b for b in bands if b not in wide.columns]
+    if missing:
+        raise ValueError(
+            f"{path.name} has no {missing} series (it carries {sorted(wide.columns)}). "
+            f"An age-restricted metric cannot be published without the population "
+            f"its register is measured against."
+        )
+    out = wide[bands].rename(columns={b: band_pop_col(b) for b in bands})
+    out.index.name = code_col
+    return out.reset_index()
+
+
+def load_lsoa21_age_bands(band_dir: Path, year: int, bands: list[str]) -> pd.DataFrame:
+    """LSOA 2021 resident population for each requested age band, for `year`.
+
+    The published denominator for an age-restricted metric, and the exact analogue
+    of `load_lsoa21_population` for one. No fallback to a neighbouring year, for
+    the same reason: a silently substituted denominator is the failure this exists
+    to remove.
+
+    A band population of zero is left as zero here and rejected to NaN where the
+    rate is formed, not clamped. Two LSOAs have a 50+ population of exactly 0 in
+    2021 -- E01033276 and E01034950, both purpose-built student accommodation --
+    and osteoporosis there is unmeasurable, not nil.
+    """
+    path = band_dir / f"NM_2014_1_TYPE151_{year}.csv"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No LSOA 2021 age-band population file for {year} at {path}. "
+            f"Run the fetch_populations node for that year."
+        )
+    return _load_age_bands(path, bands, "LSOA21CD")
+
+
+def load_lsoa11_age_bands(band_dir: Path, year: int, bands: list[str],
+                          fallback_year: int) -> tuple[pd.DataFrame, int]:
+    """LSOA 2011 resident population per age band, falling back to `fallback_year`.
+
+    Used only to carry a metric's own denominator across the crosswalk, so that a
+    merged LSOA 2021 area combines its parents' rates weighted by the population
+    each rate is measured against rather than by residents of every age.
+
+    The 2011-vintage series (Nomis NM_2010_1) ends in 2020, so later years have no
+    2011-vintage band population and there is nothing to substitute but the last
+    one. That is survivable here precisely because this denominator does not reach
+    the outputs: it is divided back out immediately after the crosswalk, so for
+    unchanged and split areas it cancels exactly, and only the weighting of a merge
+    is affected. `fallback_year` is a required argument rather than a default so
+    the substitution is a decision at the call site, never a silent one.
+
+    Returns `(frame, year_used)` so the caller can say which it got.
+    """
+    path = band_dir / f"NM_2010_1_TYPE298_{year}.csv"
+    used = year
+    if not path.exists():
+        path, used = band_dir / f"NM_2010_1_TYPE298_{fallback_year}.csv", fallback_year
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No LSOA 2011 age-band population file for {year} or {fallback_year} "
+                f"in {band_dir}. Run the fetch_populations node."
+            )
+    return _load_age_bands(path, bands, "LSOA11CD"), used

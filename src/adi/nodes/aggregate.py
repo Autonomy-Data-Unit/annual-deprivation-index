@@ -12,12 +12,16 @@ async def main(ctx, print, domains_ready: dict) -> bool:
     
     from adi.utils.geo import (
         COVERED_POP_SUFFIX,
+        band_pop_col,
         build_crosswalk,
         apply_crosswalk,
         aggregate_to_geography,
         covered_population,
+        load_lsoa11_age_bands,
+        load_lsoa21_age_bands,
         load_lsoa21_population,
     )
+    from adi.utils.qof import qof_age_bands
     run_name = ctx.vars["run_name"]
     lsoa_vintage = ctx.vars["lsoa_vintage"]
     year_start = ctx.vars["year_start"]
@@ -46,6 +50,34 @@ async def main(ctx, print, domains_ready: dict) -> bool:
         if pop_year not in _populations:
             _populations[pop_year] = load_lsoa21_population(pop_dir_2021, pop_year)
         return _populations[pop_year]
+    
+    
+    band_dir = const.population_data_path / "lsoa_age_bands"
+    
+    _band_populations = {}
+    _qof_bands = {}
+    
+    #: Last year the 2011-vintage age-band series exists for. Only used to weight a
+    #: MERGE across the crosswalk, where it is divided straight back out; see
+    #: `load_lsoa11_age_bands`.
+    LSOA11_BAND_LAST_YEAR = 2020
+    
+    
+    def _band_population_for(pop_year, bands):
+        """LSOA 2021 resident population per age band for `pop_year`, loaded once."""
+        key = (pop_year, tuple(sorted(bands)))
+        if key not in _band_populations:
+            _band_populations[key] = load_lsoa21_age_bands(band_dir, pop_year, sorted(bands))
+        return _band_populations[key]
+    
+    
+    def _qof_bands_for(year_key):
+        """`{disease: age band}` QOF measured each register against, that QOF year."""
+        if year_key not in _qof_bands:
+            _qof_bands[year_key] = qof_age_bands(
+                const.qof_schemas_path, const.qof_data_path / "raw", year_key,
+            )
+        return _qof_bands[year_key]
     
     
     def _crosswalk_for(pop_year):
@@ -126,7 +158,8 @@ async def main(ctx, print, domains_ready: dict) -> bool:
         return int(m.group(1))
     
     
-    def _reset_denominator(df, count_cols, pop_col, pop_year, derived_counts):
+    def _reset_denominator(df, count_cols, pop_col, pop_year, derived_counts,
+                           count_pops=None, bands=()):
         """Swap the crosswalked denominator for the real LSOA 2021 estimate.
     
         `apply_crosswalk` carries the LSOA 2011 population through the crosswalk,
@@ -149,26 +182,51 @@ async def main(ctx, print, domains_ready: dict) -> bool:
         The denominator comes from `_population_for(pop_year)` -- the same cached
         frame that weighted this file's crosswalk. Do not load it independently
         here: numerator and denominator drifting apart is #6.
+    
+        `count_pops` names the counts measured against something other than the whole
+        resident population -- QOF's age-restricted registers, osteoporosis against
+        50+ and depression against 18+. Each such count is divided by its OWN carried
+        denominator and multiplied by that band's real LSOA 2021 population, which is
+        the same operation as for `pop`, just with a different column. Counts absent
+        from the mapping are untouched.
+    
+        A band population of zero rejects to NaN rather than producing a zero count:
+        two LSOAs have no 50+ residents at all in 2021 (E01033276 and E01034950, both
+        purpose-built student accommodation), and osteoporosis there is unmeasurable,
+        not nil. `pop` itself is never zero, so the same guard is a no-op for every
+        pre-existing metric.
         """
+        count_pops = count_pops or {}
         df = df.reset_index(drop=True).copy()
+    
+        # Every population column the frame carries: the resident one, plus one per
+        # age band in use. All are swapped together, so a metric's numerator and its
+        # denominator always move to the same vintage and year.
+        pop_targets = [pop_col] + sorted(set(count_pops.values()) - {pop_col})
+    
         if derived_counts:
-            denom = df[pop_col].replace(0, np.nan)
             for col in count_cols:
+                denom = df[count_pops.get(col, pop_col)].replace(0, np.nan)
                 df[f"_rate_{col}"] = df[col] / denom
     
         pop21 = _population_for(pop_year)
-        df = df.drop(columns=[pop_col]).merge(pop21, on="LSOA21CD", how="left")
+        if bands:
+            pop21 = pop21.merge(_band_population_for(pop_year, bands),
+                                on="LSOA21CD", how="left")
+        df = df.drop(columns=pop_targets).merge(pop21, on="LSOA21CD", how="left")
     
-        n_missing = int(df[pop_col].isna().sum())
-        if n_missing:
-            raise ValueError(
-                f"{n_missing} LSOA 2021 areas have no {pop_year} population estimate. "
-                f"Refusing to publish rates against a partial denominator."
-            )
+        for target in pop_targets:
+            n_missing = int(df[target].isna().sum())
+            if n_missing:
+                raise ValueError(
+                    f"{n_missing} LSOA 2021 areas have no {pop_year} value for "
+                    f"{target!r}. Refusing to publish rates against a partial denominator."
+                )
     
         if derived_counts:
             for col in count_cols:
-                df[col] = df[f"_rate_{col}"] * df[pop_col]
+                target = df[count_pops.get(col, pop_col)]
+                df[col] = df[f"_rate_{col}"] * target.where(target > 0)
             df = df.drop(columns=[f"_rate_{col}" for col in count_cols])
         return df
     
@@ -200,6 +258,90 @@ async def main(ctx, print, domains_ready: dict) -> bool:
         }
     
     
+    def _health_age_restricted(df, pop_col, stem, pop_year):
+        """Turn `{CODE}_qof_prevalence_rate` into a publishable count, denominator and rate.
+    
+        process_health emits the age-restricted prevalence as a RATE alone, because the
+        rate falls out of the QOF file (register over the list QOF measured it against)
+        while the count and the aggregation weight need a resident population this node
+        is the first to have. That population is the age band's, not everybody's:
+        osteoporosis is measured against the 50+ population and depression against 18+.
+    
+        Three things come back:
+    
+          * `{CODE}_qof_afflicted` -- the rate times the band's LSOA 2011 population, so
+            the crosswalk has an absolute quantity to move. It is immediately divided
+            back out by `_reset_denominator`, which re-expresses it against the real
+            LSOA 2021 band population, so this vintage never reaches the outputs.
+          * `pop_{band}` -- carried across the crosswalk beside it. For unchanged and
+            split areas numerator and denominator scale by the same weight and cancel;
+            for a MERGE they do not, and weighting two areas' osteoporosis rates by
+            residents of every age rather than by the over-fifties is wrong by their
+            difference in age structure -- 57% on one merged area in 2016-17.
+          * `count_pops` -- which population each new count belongs to, threaded on
+            through `covered_population` and `aggregate_to_geography` so that every
+            level above LSOA weights by the eligible population too. Get this wrong and
+            LSOA looks right while LAD, region and England are all wrong.
+    
+        Which band applies is read from the source, per year, by `qof_age_bands`; it is
+        not stable (AST is measured against the whole list until 2019-20 and against 6+
+        from 2020-21, OB moves 16+ to 18+ after 2014-15). A condition carrying rates
+        without a band would have no denominator, so it raises rather than guessing one.
+        """
+        year_key = stem.removeprefix("health_")
+        bands = _qof_bands_for(year_key)
+    
+        rate_cols = {c[:-len("_qof_prevalence_rate")]: c for c in df.columns
+                     if c.endswith("_qof_prevalence_rate")}
+        measured = {code for code, col in rate_cols.items() if df[col].notna().any()}
+        orphans = sorted(measured - set(bands))
+        if orphans:
+            raise ValueError(
+                f"{stem}: {orphans} carry an age-restricted rate but QOF {year_key} gives "
+                f"them no age band, so there is no population to publish them against. "
+                f"process_health and adi.utils.qof.qof_age_bands disagree about this year."
+            )
+        if not rate_cols:
+            return {}, {}, {}, []
+    
+        used = sorted({bands[code] for code in rate_cols if code in bands})
+        extra_pops = {}
+        if used:
+            band_pops, band_year = load_lsoa11_age_bands(
+                band_dir, pop_year, used, LSOA11_BAND_LAST_YEAR,
+            )
+            df_bands = df[["LSOA11CD"]].merge(band_pops, on="LSOA11CD", how="left")
+            band_cols = [band_pop_col(b) for b in used]
+            missing = int(df_bands[band_cols].isna().any(axis=1).sum())
+            if missing:
+                raise ValueError(
+                    f"{stem}: {missing} LSOA 2011 areas have no {band_year} age-band "
+                    f"population. Refusing to build an age-restricted count against a "
+                    f"partial denominator."
+                )
+            extra_pops = {c: df_bands[c].to_numpy() for c in band_cols}
+    
+        extra_counts, count_pops = {}, {}
+        for code in sorted(rate_cols):
+            col = f"{code}_qof_afflicted"
+            if code in bands:
+                pop_of = band_pop_col(bands[code])
+                extra_counts[col] = df[rate_cols[code]].to_numpy() * extra_pops[pop_of]
+            else:
+                # QOF measured this register against the whole list that year, so there
+                # is no age-restricted rate and no age-restricted count: AST until
+                # 2019-20, NDH before 2020-21, everything in 2013-14. The column is kept
+                # and left empty so the schema is the same in all twelve years, rather
+                # than a consumer meeting a KeyError in some of them. `pop_col` here is
+                # only somewhere for the all-NaN column to point: the count is NaN, so
+                # its `_pop` and `_rate` are NaN too and no resident population is ever
+                # used as an age-restricted denominator.
+                pop_of = pop_col
+                extra_counts[col] = np.full(len(df), np.nan)
+            count_pops[col] = pop_of
+        return extra_counts, extra_pops, count_pops, used
+    
+    
     def _add_ratios(frame, ratio_cols):
         """Recompute ratio-of-two-counts columns on a published frame.
     
@@ -213,7 +355,8 @@ async def main(ctx, print, domains_ready: dict) -> bool:
     
     
     def _process_domain(domain_name, domain_dir, count_cols_fn, pop_col, year_pattern,
-                        derived_counts=False, extra_counts_fn=None, ratio_cols=()):
+                        derived_counts=False, extra_counts_fn=None, ratio_cols=(),
+                        age_restricted_fn=None):
         """Process a single domain: crosswalk + aggregate to all geography levels."""
         files = sorted(domain_dir.glob(year_pattern))
         if not files:
@@ -242,13 +385,29 @@ async def main(ctx, print, domains_ready: dict) -> bool:
             # the two cancel for a split LSOA only when they are the same year.
             pop_year = _pop_year_from_stem(stem)
     
+            # Counts measured against a population other than everybody -- QOF's
+            # age-restricted registers. Their own denominator travels with them from
+            # here on, in `count_pops`, because summing an over-fifties count against a
+            # whole-population denominator is wrong at every level above LSOA.
+            count_pops, bands, band_cols = {}, [], []
+            if age_restricted_fn is not None:
+                extra, band_pops, count_pops, bands = age_restricted_fn(
+                    df, pop_col, stem, pop_year,
+                )
+                for name, values in {**band_pops, **extra}.items():
+                    df[name] = values
+                count_cols = count_cols + list(extra)
+                band_cols = list(band_pops)
+    
             # Apply crosswalk (LSOA 2011 -> LSOA 2021)
-            lsoa21_df = apply_crosswalk(df, _crosswalk_for(pop_year), count_cols, pop_col)
+            lsoa21_df = apply_crosswalk(df, _crosswalk_for(pop_year), count_cols, pop_col,
+                                        extra_pop_cols=band_cols)
     
             # Publish against the real LSOA 2021 mid-year estimate for this year,
             # not the crosswalked (and, from 2021, frozen) 2011-vintage population.
             lsoa21_df = _reset_denominator(
                 lsoa21_df, count_cols, pop_col, pop_year, derived_counts,
+                count_pops=count_pops, bands=bands,
             )
     
             _check_lsoa_coverage(stem, lsoa21_df)
@@ -264,12 +423,17 @@ async def main(ctx, print, domains_ready: dict) -> bool:
             lsoa_names = lsoa_to_lad[["LSOA21CD", "LSOA21NM"]].drop_duplicates()
             lsoa_out = lsoa_names.merge(lsoa21_df, on="LSOA21CD", how="right")
             lsoa_out = pd.concat(
-                [lsoa_out, covered_population(lsoa_out, count_cols, pop_col)], axis=1,
+                [lsoa_out, covered_population(lsoa_out, count_cols, pop_col, count_pops)],
+                axis=1,
             )
             for col in count_cols:
                 denom = lsoa_out[f"{col}{COVERED_POP_SUFFIX}"].replace(0, np.nan)
                 lsoa_out[f"{col}_rate"] = lsoa_out[col] / denom
             lsoa_out = _add_ratios(lsoa_out, ratio_cols)
+            # The raw band populations were scaffolding for the crosswalk. Each metric
+            # carries its own denominator as `{col}_pop`, and dropping these keeps one
+            # schema across all four levels rather than extra columns at LSOA only.
+            lsoa_out = lsoa_out.drop(columns=band_cols)
             lsoa_out.to_csv(lsoa_dir / f"{stem}.csv", index=False)
     
             # --- LAD, Region and England ---
@@ -285,7 +449,7 @@ async def main(ctx, print, domains_ready: dict) -> bool:
                 level_dir.mkdir(parents=True, exist_ok=True)
                 level_df = aggregate_to_geography(
                     lsoa21_df, lookup, "LSOA21CD", code_col, name_col,
-                    count_cols, pop_col,
+                    count_cols, pop_col, count_pops=count_pops,
                 )
                 level_df = _add_ratios(level_df, ratio_cols)
                 level_df.to_csv(level_dir / f"{stem}.csv", index=False)
@@ -315,6 +479,7 @@ async def main(ctx, print, domains_ready: dict) -> bool:
         "health_*.csv",
         derived_counts=True,
         extra_counts_fn=_health_coverage_counts,
+        age_restricted_fn=_health_age_restricted,
         ratio_cols=(
             # `registration_coverage` is `gp_registrations_rate` by construction. Both
             # are published: the rate column is the shape every other count carries,
