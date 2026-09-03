@@ -24,7 +24,11 @@ fi
 
 # 2. compact web data
 if [[ $FORCE -eq 1 || ! -f site/static/data/manifest.json || ! -f site/static/data/imd.json \
-   || ! -f site/static/data/area/lad.json || ! -f site/static/downloads/adi-lsoa.zip ]]; then
+   || ! -f site/static/data/area/lad.json || ! -f site/static/data/downloads.json \
+   || ! -f site/static/downloads/adi-england.zip \
+   || ! -f site/static/downloads/adi-region.zip \
+   || ! -f site/static/downloads/adi-lad.zip \
+   || ! -f site/static/downloads/adi-lsoa.zip ]]; then
   echo "[web] building compact data…"
   uv run --with pandas --with numpy --with scipy python -u site/scripts/build_data.py
 else
