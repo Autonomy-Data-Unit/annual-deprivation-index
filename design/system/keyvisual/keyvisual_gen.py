@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADI key visual — authentic England choropleth hero, TRUE vector.
 
-Reads the REAL boundary file + REAL 2024 Claimant Count rate values
+Reads the REAL boundary file + latest Claimant Count rate values
 and emits clean <path> per LAD, coloured by the locked neutral slate sequential
 ramp (gold is NOT the map). Composes a proper hero: choropleth motif + ADI
 lockup + descriptor + ONE restrained golden accent (a single highlighted area
@@ -51,12 +51,14 @@ def load_data():
     codes = json.loads((STATIC / "data/codes/lad.json").read_text())
     manifest = json.loads((STATIC / "data/manifest.json").read_text())
     breaks = manifest["domains"]["employment"]["metrics"][0]["scale"]["breaks"]
+    first_year = cr["years"][0]
     last_idx = len(cr["years"]) - 1
     code_to_val = {}
     for i, code in enumerate(codes["codes"]):
         code_to_val[code] = cr["values"][last_idx][i]
     code_to_name = dict(zip(codes["codes"], codes["names"]))
-    return geo, code_to_val, code_to_name, breaks, cr["years"][last_idx]
+    return (geo, code_to_val, code_to_name, breaks, first_year,
+            cr["years"][last_idx])
 
 
 def class_of(v: float, breaks: list[float]) -> int:
@@ -157,15 +159,15 @@ def build_map_svg(geo, code_to_val, breaks, proj, *, highlight_code=None,
 
 
 def compose(dark: bool) -> str:
-    geo, code_to_val, code_to_name, breaks, year = load_data()
+    geo, code_to_val, code_to_name, breaks, first_year, year = load_data()
 
     W, H = 1200, 630
     # Map occupies the left ~55%; text block on the right.
     map_box_w = 600
     proj = Projector(geo, map_box_w, H, pad=70)
 
-    # Choose the highlight: the LAD with the highest 2024 claimant rate present
-    # in the geometry — the single golden accent. (One area, thin gold outline.)
+    # Choose the LAD with the highest latest-year claimant rate present in the
+    # geometry — the single golden accent. (One area, thin gold outline.)
     geo_codes = {f["properties"]["LAD25CD"] for f in geo["features"]}
     cand = {c: v for c, v in code_to_val.items() if c in geo_codes}
     highlight_code = max(cand, key=cand.get)
@@ -195,8 +197,9 @@ def compose(dark: bool) -> str:
                               FONT_SANS_MEDIUM, 30)
     sub1, _ = _shape_to_path(f"England · Lower-layer Super Output Areas",
                              FONT_SANS_REGULAR, 19)
-    sub2, _ = _shape_to_path("Employment · Crime · Health · "
-                             "2014–2024", FONT_SANS_REGULAR, 19)
+    sub2, _ = _shape_to_path(
+        f"Employment · Crime · Health · {first_year}–{year}",
+        FONT_SANS_REGULAR, 19)
     cap, _ = _shape_to_path(
         f"Claimant Count rate, {year}", FONT_SANS_MEDIUM, 17)
     hlcap, _ = _shape_to_path(

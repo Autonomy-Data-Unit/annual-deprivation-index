@@ -1,8 +1,8 @@
 # ADI key visual
 
 Hero / share-card key visual: an **authentic England choropleth** built as TRUE
-vector from the real boundary file and real 2024 Claimant Count rate
-data, composed with the ADI lockup into an ONS-grade hero.
+vector from the real boundary file and the latest Claimant Count rate data in
+the current site export, composed with the ADI lockup into an ONS-grade hero.
 
 ## Files
 
@@ -17,8 +17,8 @@ data, composed with the ADI lockup into an ONS-grade hero.
 
 - `geo/lad.geojson` — 296 Local Authority Districts, `properties.LAD25CD`
   (239 Polygon + 57 MultiPolygon, both handled).
-- `data/map/lad/employment/claimant_rate.json` — `values[last_year_index]`
-  (2024) aligned to…
+- `data/map/lad/employment/claimant_rate.json` — the first and last published
+  years are read from `years`; values come from the latest year's row and align to…
 - `data/codes/lad.json` `codes` — the canonical area order.
 - `data/manifest.json` → `domains.employment.metrics[0].scale.breaks` — the 6
   class breaks → 7 colour classes.
@@ -30,10 +30,10 @@ Joined by `LAD25CD`. No-data areas fall back to `--grey-3` (#eee).
 - Fills use the locked **neutral slate sequential ramp** (`--seq-1..7`):
   `#f3f5f7 #d7dde3 #b3bdc7 #8b97a4 #636f7d #424b56 #262c33`. Gold is **not** the
   map.
-- ONE restrained golden accent: a single highlighted area —
-  **Birmingham**, the LAD with the highest 2024 claimant rate (6.4%) — outlined
-  with a thin `#fbc441` stroke. Plus the family golden hairline rule under the
-  lockup.
+- ONE restrained golden accent: the generator finds whichever LAD has the
+  highest claimant rate in the latest published year and outlines it with a thin
+  `#fbc441` stroke. The highlighted LAD and value are data-derived, not fixed.
+  Plus the family golden hairline rule under the lockup.
 - Area boundaries: white hairline on the light variant, ink hairline on dark.
 
 ## Projection
@@ -44,10 +44,13 @@ occupies the left ~50%; the lockup + descriptor + legend sit on the right.
 
 ## Verification
 
-Rendered at full 1200×630 and thumbnailed to ~600px and ~300px and inspected
-(`_proofs/kv-*`): the silhouette reads unmistakably as England, the "ADI"
-wordmark + descriptor stay legible at 300px, and the gold accent appears once.
-Dark chosen for the OG card on the small-thumbnail legibility test.
+Inspect regenerated assets at full 1200×630 and in the tracked
+`../_proofs/kv-*` thumbnails at 600px and 300px: the silhouette should read
+unmistakably as England, the "ADI" wordmark and descriptor should stay legible
+at 300px, and the gold accent should appear once. The dark variant is used for
+the OG card because it remains the most legible thumbnail. The general
+`../_proofs/render_proofs.py` script does not generate these key-visual proofs;
+the final block below creates them reproducibly from the full-size PNGs.
 
 Regenerate:
 
@@ -61,6 +64,13 @@ for v in ['light','dark']:
     Image.open(io.BytesIO(cairosvg.svg2png(bytestring=svg.encode(),output_width=1200,output_height=630))).convert('RGB').save(f'keyvisual-{v}.png')
 svg=Path('keyvisual-dark.svg').read_text().replace('var(--adi-accent, #fbc441)','#fbc441')
 Image.open(io.BytesIO(cairosvg.svg2png(bytestring=svg.encode(),output_width=1200,output_height=630))).convert('RGB').save('og-image.png')
+
+proofs=Path('../_proofs')
+for v in ['light','dark']:
+    image=Image.open(f'keyvisual-{v}.png').convert('RGB')
+    for width in [600,300]:
+        height=round(image.height*width/image.width)
+        image.resize((width,height),Image.Resampling.LANCZOS).save(proofs/f'kv-{v}-{width}.png')
 PY
 ```
 
