@@ -4,7 +4,11 @@ from adi import const
 
 async def main(ctx, print) -> bool:
     """Download LSOA mid-year population estimates from Nomis."""
-    from adi.utils.nomis import download_populations, latest_population_year
+    from adi.utils.nomis import (
+        download_population_bands,
+        download_populations,
+        latest_population_year,
+    )
     import asyncio
     year_start = ctx.vars["year_start"]
     year_end = ctx.vars["year_end"]
@@ -12,6 +16,7 @@ async def main(ctx, print) -> bool:
     
     pop_dir_2021 = const.population_data_path / "lsoa_2021"
     pop_dir_2011 = const.population_data_path / "lsoa_2011"
+    band_dir = const.population_data_path / "lsoa_age_bands"
     
     tasks = []
     
@@ -46,6 +51,34 @@ async def main(ctx, print) -> bool:
           f"(series ends {lsoa2011_latest})")
     tasks.append(download_populations(
         pop_dir_2011, lsoa2011_start, year_end,
+        geography_type="TYPE298", beyond_series="skip", print=print,
+    ))
+    
+    # The same two series again, split into the age bands QOF measures prevalence
+    # against (asthma 6+, rheumatoid arthritis 16+, diabetes 17+, chronic kidney
+    # disease / depression / epilepsy / non-diabetic hyperglycaemia / obesity 18+,
+    # osteoporosis 50+). The ADI divides every condition by the all-ages list, which
+    # both misstates the level -- osteoporosis 0.450% against NHS England's published
+    # 1.198% -- and, because deprived neighbourhoods are child-heavy, deflates
+    # deprived areas more than affluent ones, flattening the index's own health
+    # deprivation gradient (#42).
+    #
+    # One changed query parameter on datasets already in use, so coverage is
+    # identical to the all-ages population above and the same beyond-series policies
+    # apply for the same reasons: 2025 stands on the mid-2024 LSOA 2021 estimate, and
+    # the LSOA 2011 series simply stops at 2020. Both vintages are needed -- LSOA 2021
+    # is the published denominator, LSOA 2011 weights the crosswalk's merge rows.
+    #
+    # ~6.6 MB per year, 18 years, so this dominates the node on a cold run and costs
+    # nothing on a warm one: existing files are re-validated, never re-downloaded.
+    print(f"fetch_populations: QOF age bands, LSOA 2021 {year_start}-{year_end}")
+    tasks.append(download_population_bands(
+        band_dir, year_start, year_end,
+        geography_type="TYPE151", beyond_series="substitute", print=print,
+    ))
+    print(f"fetch_populations: QOF age bands, LSOA 2011 {lsoa2011_start}-{year_end}")
+    tasks.append(download_population_bands(
+        band_dir, lsoa2011_start, year_end,
         geography_type="TYPE298", beyond_series="skip", print=print,
     ))
     
