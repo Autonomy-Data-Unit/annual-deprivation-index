@@ -80,13 +80,15 @@ CRIME_TYPES = [
 HEALTH = [
     ("AF", "Atrial fibrillation"), ("AST", "Asthma"), ("CAN", "Cancer"),
     ("CHD", "Coronary heart disease"), ("CKD", "Chronic kidney disease"),
-    ("COPD", "COPD"), ("DEM", "Dementia"), ("DEP", "Depression"),
+    ("COPD", "Chronic obstructive pulmonary disease"),
+    ("DEM", "Dementia"), ("DEP", "Depression"),
     ("DM", "Diabetes"), ("EP", "Epilepsy"), ("HF", "Heart failure"),
     ("HYP", "Hypertension"), ("LD", "Learning disability"),
     ("MH", "Severe mental illness"), ("NDH", "Non-diabetic hyperglycaemia"),
     ("OB", "Obesity"), ("OST", "Osteoporosis"),
     ("PAD", "Peripheral arterial disease"), ("PC", "Palliative care"),
-    ("RA", "Rheumatoid arthritis"), ("STIA", "Stroke / TIA"),
+    ("RA", "Rheumatoid arthritis"),
+    ("STIA", "Stroke or transient ischaemic attack"),
     ("CVDPP", "CVD primary prevention"), ("SMOK", "Smoking"),
     ("THY", "Hypothyroidism"),
 ]
@@ -147,6 +149,24 @@ def write_json(path: Path, obj, indent=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(obj, f, separators=(",", ":"), allow_nan=False, indent=indent)
+
+
+def _decimal_size(size: int) -> str:
+    """Human-readable on-disk size using the decimal units named in the result."""
+    if size >= 1_000_000:
+        return f"{size / 1_000_000:.1f} MB"
+    if size >= 1_000:
+        return f"{size / 1_000:.0f} KB"
+    return f"{size} bytes"
+
+
+def _binary_size(size: int) -> str:
+    """Human-readable extracted size using explicitly binary IEC units."""
+    if size >= 1_048_576:
+        return f"{size / 1_048_576:.1f} MiB"
+    if size >= 1_024:
+        return f"{size / 1_024:.1f} KiB"
+    return f"{size} bytes"
 
 
 _ROOT_DATA_OUTPUTS = {
@@ -223,6 +243,14 @@ def _validate_staged_outputs() -> None:
             f"missing={sorted(map(str, expected_downloads - set(staged_downloads)))}, "
             f"extra={sorted(map(str, set(staged_downloads) - expected_downloads))}"
         )
+    with (WEB / "downloads.json").open() as f:
+        download_index = json.load(f)
+    download_metadata = {entry["level"]: entry for entry in download_index["bundles"]}
+    if set(download_metadata) != set(LEVELS):
+        raise RuntimeError(
+            "Download metadata does not cover every level; "
+            f"found={sorted(download_metadata)}, expected={sorted(LEVELS)}"
+        )
     for level in LEVELS:
         zip_path = DOWNLOADS / f"adi-{level}.zip"
         prefix = f"adi-{level}/"
@@ -249,6 +277,27 @@ def _validate_staged_outputs() -> None:
                         f"{stat.filemode(unix_mode)}, expected -rw-r--r--"
                     )
 
+            extracted_bytes = sum(info.file_size for info in archive.infolist())
+            metadata = download_metadata[level]
+            expected_metadata = {
+                "label": _LEVEL_LABELS[level],
+                "file": f"downloads/{zip_path.name}",
+                "bytes": zip_path.stat().st_size,
+                "size": _decimal_size(zip_path.stat().st_size),
+                "extracted_bytes": extracted_bytes,
+                "extracted_size": _binary_size(extracted_bytes),
+                "areas": len(codes_by_level[level]),
+            }
+            mismatched_metadata = {
+                key: {"actual": metadata.get(key), "expected": value}
+                for key, value in expected_metadata.items()
+                if metadata.get(key) != value
+            }
+            if mismatched_metadata:
+                raise RuntimeError(
+                    f"Download metadata is stale for {zip_path.name}: {mismatched_metadata}"
+                )
+
             expected_areas = len(codes_by_level[level])
             readme = archive.read(f"{prefix}README.txt").decode("utf-8")
             expected_rows = expected_areas * len(YEARS)
@@ -261,21 +310,50 @@ def _validate_staged_outputs() -> None:
             geography_member = f"{prefix}adi-{level}-geography.csv"
             with archive.open(geography_member) as geography_csv:
                 geography = pd.read_csv(geography_csv)
+            geography_columns = {
+                "code", "name", "geography_level", "lad_code", "lad_name",
+                "region_code", "region_name",
+            }
             if (
                 len(geography) != expected_areas
                 or set(geography["code"]) != set(codes_by_level[level])
+                or set(geography.columns) != geography_columns
             ):
                 raise RuntimeError(f"Geography dictionary is incomplete in {zip_path.name}")
+            required_parents = {
+                "lsoa": ["lad_code", "lad_name", "region_code", "region_name"],
+                "lad": ["lad_code", "lad_name", "region_code", "region_name"],
+                "region": ["region_code", "region_name"],
+                "england": [],
+            }[level]
+            if required_parents and geography[required_parents].isna().any().any():
+                raise RuntimeError(
+                    f"Current parent geography is missing in {geography_member}"
+                )
 
             dictionary_member = f"{prefix}adi-{level}-data-dictionary.csv"
             with archive.open(dictionary_member) as dictionary_csv:
                 dictionary = pd.read_csv(dictionary_csv)
             expected_metrics = 1 + len(CRIME_TYPES) + len(HEALTH)
+            expected_dictionary_rows = expected_metrics + len(HEALTH_QUALITY_COLUMNS)
             if (
-                len(dictionary) != expected_metrics
-                or dictionary["metric"].nunique() != expected_metrics
+                len(dictionary) != expected_dictionary_rows
+                or dictionary["metric"].nunique() != expected_dictionary_rows
+                or (dictionary["column_role"] == "metric").sum() != expected_metrics
             ):
                 raise RuntimeError(f"Metric dictionary is incomplete in {zip_path.name}")
+
+            quality_dictionary = dictionary[
+                dictionary["column_role"] == "quality_indicator"
+            ]
+            if (
+                set(quality_dictionary["indicator_column"])
+                != set(HEALTH_QUALITY_COLUMNS)
+                or quality_dictionary["indicator_definition"].isna().any()
+            ):
+                raise RuntimeError(
+                    f"Health quality indicators are not defined in {dictionary_member}"
+                )
 
             for domain in _DOMAIN_FILES:
                 member = f"{prefix}adi-{level}-{domain}.csv"
@@ -288,7 +366,10 @@ def _validate_staged_outputs() -> None:
                         if rows == len(chunk):
                             rate_columns = [c for c in chunk if c.endswith("_rate")]
                             count_columns = [c.removesuffix("_rate") for c in rate_columns]
-                            domain_dictionary = dictionary[dictionary["domain"] == domain]
+                            domain_dictionary = dictionary[
+                                (dictionary["domain"] == domain)
+                                & (dictionary["column_role"] == "metric")
+                            ]
                             if (
                                 set(domain_dictionary["count_column"]) != set(count_columns)
                                 or set(domain_dictionary["coverage_population_column"])
@@ -298,6 +379,13 @@ def _validate_staged_outputs() -> None:
                                 raise RuntimeError(
                                     f"Metric dictionary columns do not match {member}"
                                 )
+                            if domain == "health":
+                                missing_quality = set(HEALTH_QUALITY_COLUMNS) - set(chunk.columns)
+                                if missing_quality:
+                                    raise RuntimeError(
+                                        f"Health quality columns missing from {member}: "
+                                        f"{sorted(missing_quality)}"
+                                    )
                         for year, year_rows in chunk.groupby("year"):
                             year = int(year)
                             if year not in codes_by_year:
@@ -342,6 +430,14 @@ def _validate_staged_outputs() -> None:
                                     f"Published rates do not reproduce in {member}:\n{sample}"
                                 )
 
+                        if domain == "health":
+                            registration = chunk["registration_coverage"].dropna()
+                            qof = chunk["qof_coverage"].dropna()
+                            if (registration < 0).any() or ((qof < 0) | (qof > 1)).any():
+                                raise RuntimeError(
+                                    f"Health coverage indicator outside its valid range in {member}"
+                                )
+
                 expected_by_year = {year: expected_areas for year in YEARS}
                 expected_codes = set(codes_by_level[level])
                 wrong_code_sets = {
@@ -369,6 +465,13 @@ def _validate_staged_outputs() -> None:
             leaked = sorted(code for code in DROP_HEALTH if f"{code}_" in header)
             if leaked:
                 raise RuntimeError(f"Dropped health metrics leaked into {health_member}: {leaked}")
+            leaked_support = sorted(
+                column for column in HEALTH_SUPPORT_COLUMNS if column in header.split(",")
+            )
+            if leaked_support:
+                raise RuntimeError(
+                    f"Internal health coverage counts leaked into {health_member}: {leaked_support}"
+                )
 
 
 def _promote_files(staged_root: Path, live_root: Path, owns) -> list[Path]:
@@ -428,6 +531,13 @@ for lv in LEVELS:
 print("Applying data-quality corrections...")
 
 COUNT_POP_SUFFIX = "_pop"
+HEALTH_QUALITY_COLUMNS = ("registration_coverage", "qof_coverage")
+HEALTH_SUPPORT_COUNTS = ("gp_registrations", "qof_covered_registrations")
+HEALTH_SUPPORT_COLUMNS = tuple(
+    column
+    for count_col in HEALTH_SUPPORT_COUNTS
+    for column in (count_col, f"{count_col}{COUNT_POP_SUFFIX}", f"{count_col}_rate")
+)
 
 
 # Geography used to propagate every LSOA correction upward. Correcting each stored level
@@ -599,8 +709,8 @@ https://adi.apps.autonomy.work
 CONTENTS
   adi-{level}-employment.csv       Claimant Count, Nomis NM_162_1
   adi-{level}-crime.csv            Police-recorded street crime, data.police.uk
-  adi-{level}-health.csv           Modelled QOF prevalence, 21 conditions
-  adi-{level}-data-dictionary.csv  Metric labels, columns, units, sources and availability
+  adi-{level}-health.csv           Modelled QOF prevalence and two coverage indicators
+  adi-{level}-data-dictionary.csv  Metric/indicator definitions, units, sources and availability
   adi-{level}-geography.csv        Current LAD and region codes/names for each area
 
 SHAPE AND GEOGRAPHY
@@ -620,7 +730,7 @@ POPULATION, COUNTS AND RATES
   2021 LSOA vintage) for that area and year. It is not an adult or working-age
   denominator. The 2025 value repeats 2024 because the source series ends in 2024.
 
-  Each metric is a three-column group:
+  Each deprivation metric is a three-column group:
     `<count>`       the metric count or modelled count
     `<count>_pop`   the population covered by that count
     `<count>_rate`  round(`<count>` / `<count>_pop`, 8)
@@ -649,10 +759,30 @@ COUNT SEMANTICS
 
   Health `_afflicted` values are modelled estimates, not observed resident counts.
   They combine published GP-practice QOF prevalence with LSOA GP-registration
-  patterns; fractional people are therefore expected. Source gaps of at most two
+  patterns, then multiply the estimated prevalence rate by the ONS resident
+  population; fractional people are therefore expected. They will not reconcile
+  to NHS England's raw QOF register totals because GP practice lists and resident
+  populations are different measures. Use `_rate` for area comparisons and
+  `_afflicted` for roll-ups within these ADI files. Source gaps of at most two
   consecutive years are filled only when they are interior gaps bounded by an
   observation on each side. Leading and trailing gaps remain blank. The CSV has
   no per-cell flag distinguishing those interpolated estimates.
+
+HEALTH COVERAGE INDICATORS
+  `registration_coverage` is the area's GP registrations divided by its ONS
+  resident population. It can exceed 1 because registrations and residents are
+  different administrative measures. It is reported for interpretation; low
+  values are not used to suppress estimates.
+
+  `qof_coverage` is the share of those GP registrations at practices included in
+  that year's QOF publication with a usable list size. It lies between 0 and 1.
+  It is an overall practice-publication measure; coverage for a specific disease
+  can be lower, and a disease estimate is withheld below 80% disease-specific
+  coverage. The internal registration counts used to calculate these indicators
+  are not additional deprivation metrics and are not included in the CSV.
+
+  Missing LSOA indicator rows (years not listed have zero):
+{health_coverage_gaps}
 
 YEARS
   Employment and crime use calendar years. Health uses QOF financial years and is
@@ -660,23 +790,29 @@ YEARS
   March 2021). A shared year label therefore does not mean identical periods.
 
 AVAILABILITY AND ADJUSTMENTS
-  Crime input is accepted only when all 12 monthly force files are present and
-  non-empty. All 10 Greater Manchester LADs and their LSOAs are blank from 2019
-  through 2025. In 2022, the 12 LADs in the Devon & Cornwall Police force area
-  and the City of London are also blank. Region and England rows remain available
-  on their reduced metric-specific coverage populations.
+  A territorial police force-year is accepted only when all 12 monthly files are
+  present and non-empty and at least 90% of records that could belong to England
+  carry an English LSOA code. A rejected force-year leaves its resident LADs and
+  LSOAs blank. Exact rows with every crime metric blank are:
+{crime_gap_table}
+  Region and England rows remain available on their reduced metric-specific
+  coverage populations.
 
-  At the health series endpoints, source values that cannot be bracketed by two
-  observations remain blank: 64 LSOAs have no health values in 2014, one has none
-  in 2024, and two have none in 2025. Non-diabetic hyperglycaemia (NDH) is blank
-  through 2020 and also blank for 16 LSOAs in its first year, 2021. Eight LSOA
-  epilepsy (EP) values in 2016 and seven LSOA heart-failure (HF) values in 2021
-  were rejected as implausible one-year spikes; aggregate coverage excludes them.
+  Source values that cannot be bracketed by two observations remain blank. LSOAs
+  with every published health metric blank are:
+{health_gap_table}
+  Non-diabetic hyperglycaemia (NDH) was not a published QOF register before
+  QOF 2020-21, so every output row is intentionally blank through 2020 rather
+  than missing through data loss. It begins in output year 2021, when
+  {ndh_2021_missing:,} LSOA rows remain blank. Eight LSOA epilepsy (EP) values
+  in 2016 and seven LSOA heart-failure (HF) values in 2021 were rejected as
+  implausible one-year spikes; aggregate coverage excludes them.
 
   Depression (DEP) in 2024 is interpolated from adjacent LSOA rates where both
-  exist; two LSOAs without both anchors remain blank. Osteoporosis (OST) in 2015
-  is likewise interpolated where both anchors exist; 64 LSOAs without a 2014
-  anchor remain blank. Both corrected metrics are reaggregated from LSOAs.
+  exist; {dep_2024_missing:,} LSOAs without both anchors remain blank.
+  Osteoporosis (OST) in 2015 is likewise interpolated where both anchors exist;
+  {ost_2015_missing:,} LSOAs without both anchors remain blank. Both corrected
+  metrics are reaggregated from LSOAs.
 
   NHS Digital warns that QOF 2020-21 implementation changes may make indicator
   values inaccurate and comparisons with earlier years unreliable. Obesity was
@@ -697,6 +833,82 @@ Generated {generated}. Methodology: https://adi.apps.autonomy.work/about
 _LEVEL_LABELS = {"england": "England", "region": "Regions",
                  "lad": "Local authorities", "lsoa": "Neighbourhoods (LSOA)"}
 _DOMAIN_FILES = {"employment": "employment", "crime": "crime", "health": "health"}
+
+
+def _missing_counts(level: str, domain: str, column: str) -> dict[int, int]:
+    counts = {}
+    for year in YEARS:
+        frame = data[level][domain].get(year)
+        if frame is None or column not in frame.columns:
+            raise ValueError(f"Cannot describe availability: no {level}/{domain}/{year}:{column}")
+        counts[year] = int(frame[column].isna().sum())
+    return counts
+
+
+def _nonzero_missing_summary(
+    level: str,
+    domain: str,
+    column: str,
+    first_year: int = YEARS[0],
+) -> str:
+    missing = _missing_counts(level, domain, column)
+    nonzero = [
+        f"{year}: {count:,}"
+        for year, count in missing.items()
+        if year >= first_year and count
+    ]
+    return "; ".join(nonzero) if nonzero else "none"
+
+
+def _crime_missing_counts(level: str) -> dict[int, int]:
+    """Count rows whose entire crime vector is blank, rejecting mixed masks."""
+    counts = {}
+    for year in YEARS:
+        frame = data[level]["crime"].get(year)
+        if frame is None:
+            raise ValueError(f"Cannot describe crime availability: no {level}/crime/{year}")
+        rate_columns = [column for column in frame if column.endswith("_rate")]
+        if len(rate_columns) != len(CRIME_TYPES):
+            raise ValueError(
+                f"Expected {len(CRIME_TYPES)} crime rates in {level}/{year}; "
+                f"found {len(rate_columns)}"
+            )
+        blank = frame[rate_columns].isna()
+        partially_blank = blank.any(axis=1) & ~blank.all(axis=1)
+        if partially_blank.any():
+            raise ValueError(
+                f"Crime metrics have different availability masks in {level}/{year}: "
+                f"{frame.index[partially_blank].tolist()[:5]}"
+            )
+        counts[year] = int(blank.all(axis=1).sum())
+    return counts
+
+
+def _crime_gap_table() -> str:
+    lad = _crime_missing_counts("lad")
+    lsoa = _crime_missing_counts("lsoa")
+    lines = ["    year   missing LAD rows   missing LSOA rows"]
+    lines.extend(f"    {year}   {lad[year]:>16,}   {lsoa[year]:>17,}" for year in YEARS)
+    return "\n".join(lines)
+
+
+def _health_gap_table() -> str:
+    rate_columns = [f"{code}_afflicted_rate" for code, _ in HEALTH]
+    lines = ["    year   LSOAs with all 21 metric rates blank"]
+    for year in YEARS:
+        frame = data["lsoa"]["health"].get(year)
+        missing = [column for column in rate_columns if column not in frame.columns]
+        if missing:
+            raise ValueError(f"Cannot describe health availability in {year}: {missing}")
+        lines.append(f"    {year}   {int(frame[rate_columns].isna().all(axis=1).sum()):>36,}")
+    return "\n".join(lines)
+
+
+def _health_coverage_gap_summary() -> str:
+    return "\n".join(
+        f"    {column}: {_nonzero_missing_summary('lsoa', 'health', column)}"
+        for column in HEALTH_QUALITY_COLUMNS
+    )
 
 
 def _metric_count_columns(columns) -> list[str]:
@@ -720,7 +932,45 @@ def _metric_count_columns(columns) -> list[str]:
     return count_columns
 
 
-def _serialise_download_table(tidy: pd.DataFrame, member: str) -> tuple[pd.DataFrame, int]:
+def _validate_health_quality_columns(tidy: pd.DataFrame, member: str) -> None:
+    """Verify the two public coverage ratios against their internal source counts."""
+    formulas = {
+        "registration_coverage": ("gp_registrations", "gp_registrations_pop"),
+        "qof_coverage": ("qof_covered_registrations", "gp_registrations"),
+    }
+    required = set(HEALTH_QUALITY_COLUMNS) | {
+        column for pair in formulas.values() for column in pair
+    }
+    missing = required - set(tidy.columns)
+    if missing:
+        raise ValueError(f"Cannot verify health coverage in {member}; missing {sorted(missing)}")
+
+    for quality_col, (numerator, denominator) in formulas.items():
+        expected = tidy[numerator] / tidy[denominator].replace(0, np.nan)
+        actual = tidy[quality_col]
+        inconsistent_blanks = expected.isna() != actual.isna()
+        present = expected.notna() & actual.notna()
+        mismatched = present & ~np.isclose(expected, actual, rtol=0, atol=5e-15)
+        bad = inconsistent_blanks | mismatched
+        if bad.any():
+            sample = tidy.loc[
+                bad, ["code", "year", numerator, denominator, quality_col]
+            ].head()
+            raise ValueError(
+                f"{member}:{quality_col} does not reproduce from its source counts:\n{sample}"
+            )
+
+    registration = tidy["registration_coverage"].dropna()
+    qof = tidy["qof_coverage"].dropna()
+    if (registration < 0).any() or ((qof < 0) | (qof > 1)).any():
+        raise ValueError(f"Health coverage indicator outside its valid range in {member}")
+
+
+def _serialise_download_table(
+    tidy: pd.DataFrame,
+    member: str,
+    indicator_columns: tuple[str, ...] = (),
+) -> tuple[pd.DataFrame, int]:
     """Format a CSV while preserving exact rate reproducibility at eight decimals."""
     tidy = tidy.copy()
     pop_cols = [c for c in tidy if c == "pop" or c.endswith(COUNT_POP_SUFFIX)]
@@ -797,16 +1047,25 @@ def _serialise_download_table(tidy: pd.DataFrame, member: str) -> tuple[pd.DataF
         tidy[count_col] = published_count
         tidy[rate_col] = published_rate
 
+    for column in indicator_columns:
+        values = tidy[column].dropna()
+        if not np.isfinite(values).all():
+            raise ValueError(f"{member}:{column} contains a non-finite value")
+        tidy[column] = tidy[column].round(8)
+
     return tidy, max_decimals
 
 
 def _data_dictionary(level: str) -> pd.DataFrame:
     common = {
         "geography_level": level,
+        "column_role": "metric",
         "coverage_population_definition": (
             "All-age population covered by this metric count; use this column as the rate denominator"
         ),
-        "rate_unit": "proportion (0 to 1), rounded to 8 decimal places",
+        "indicator_column": "",
+        "indicator_unit": "",
+        "indicator_definition": "",
     }
     rows = [{
         **common,
@@ -821,6 +1080,7 @@ def _data_dictionary(level: str) -> pd.DataFrame:
         ),
         "coverage_population_column": "claimant_count_pop",
         "rate_column": "claimant_count_rate",
+        "rate_unit": "mean monthly claimants per resident, rounded to 8 decimal places",
         "first_year": 2014,
         "last_year": 2025,
         "source": "Nomis NM_162_1",
@@ -844,12 +1104,15 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             ),
             "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
             "rate_column": f"{count_col}_rate",
+            "rate_unit": "annual incidents per resident, rounded to 8 decimal places",
             "first_year": 2014,
             "last_year": 2025,
             "source": "data.police.uk",
             "availability_and_adjustments": (
-                "Calendar years. Greater Manchester LADs/LSOAs blank 2019-2025; "
-                "12 Devon & Cornwall force-area LADs/LSOAs and City of London also blank in 2022"
+                "Calendar years; a force-year is withheld unless all 12 monthly files are "
+                "non-empty and at least 90% of potentially English records have an English "
+                f"LSOA code. Missing {level} rows by year (years not listed have zero): "
+                f"{_nonzero_missing_summary(level, 'crime', f'{count_col}_rate')}"
             ),
         })
     for code, label in HEALTH:
@@ -859,7 +1122,14 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             "endpoint source gaps remain blank rather than being extrapolated",
         ]
         if code == "NDH":
-            notes.append("blank through 2020; 16 LSOAs also blank in 2021")
+            notes.append(
+                "not collected/published as a QOF register before QOF 2020-21, so output "
+                "years 2014-2020 are intentionally blank rather than lost"
+            )
+            notes.append(
+                f"missing {level} rows by year from 2021 (years not listed have zero): "
+                f"{_nonzero_missing_summary(level, 'health', f'{count_col}_rate', 2021)}"
+            )
         if code == "EP":
             notes.append("8 implausible LSOA values rejected in 2016")
         if code == "HF":
@@ -878,22 +1148,89 @@ def _data_dictionary(level: str) -> pd.DataFrame:
             "count_column": count_col,
             "count_unit": "modelled people (fractional)",
             "count_definition": (
-                "Modelled LSOA-resident estimate from GP-practice QOF prevalence and "
-                "LSOA GP-registration patterns; not an observed patient count; short "
-                "interior source gaps may be interpolated, while endpoint gaps remain blank"
+                "Modelled prevalence rate from GP-practice QOF registers/list sizes and LSOA "
+                "registration patterns, multiplied by ONS resident population; not an "
+                "observed patient count and not directly comparable with raw QOF register "
+                "totals; short interior source gaps may be interpolated, while endpoint "
+                "gaps remain blank"
             ),
             "coverage_population_column": f"{count_col}{COUNT_POP_SUFFIX}",
             "rate_column": f"{count_col}_rate",
+            "rate_unit": (
+                "modelled people per resident (prevalence rate, 0 to 1), "
+                "rounded to 8 decimal places"
+            ),
             "first_year": 2021 if code == "NDH" else 2014,
             "last_year": 2025,
             "source": "NHS Digital / NHS England QOF",
             "availability_and_adjustments": "; ".join(notes),
         })
+    rows.extend([
+        {
+            **common,
+            "domain": "health",
+            "metric": "registration_coverage",
+            "label": "GP registration coverage",
+            "column_role": "quality_indicator",
+            "count_column": "",
+            "count_unit": "",
+            "count_definition": "",
+            "coverage_population_column": "",
+            "coverage_population_definition": "",
+            "rate_column": "",
+            "rate_unit": "",
+            "indicator_column": "registration_coverage",
+            "indicator_unit": "GP registrations per ONS resident; ratio may exceed 1",
+            "indicator_definition": (
+                "Estimated GP registrations associated with area residents divided by ONS "
+                "all-age resident population. Registrations and residents are different "
+                "administrative measures, so values can exceed 1. Reported for interpretation; "
+                "low values do not suppress disease estimates"
+            ),
+            "first_year": 2014,
+            "last_year": 2025,
+            "source": "NHS England GP registrations; ONS mid-year population",
+            "availability_and_adjustments": (
+                f"Missing {level} rows by year (years not listed have zero): "
+                f"{_nonzero_missing_summary(level, 'health', 'registration_coverage')}"
+            ),
+        },
+        {
+            **common,
+            "domain": "health",
+            "metric": "qof_coverage",
+            "label": "QOF publication coverage",
+            "column_role": "quality_indicator",
+            "count_column": "",
+            "count_unit": "",
+            "count_definition": "",
+            "coverage_population_column": "",
+            "coverage_population_definition": "",
+            "rate_column": "",
+            "rate_unit": "",
+            "indicator_column": "qof_coverage",
+            "indicator_unit": "share of GP registrations (0 to 1)",
+            "indicator_definition": (
+                "GP registrations at practices included in that year's QOF publication with "
+                "a usable list size, divided by all GP registrations associated with the area. "
+                "This is overall publication coverage; disease-specific coverage can be lower, "
+                "and disease estimates are withheld below 80% disease-specific coverage"
+            ),
+            "first_year": 2014,
+            "last_year": 2025,
+            "source": "NHS Digital / NHS England QOF; NHS England GP registrations",
+            "availability_and_adjustments": (
+                f"Missing {level} rows by year (years not listed have zero): "
+                f"{_nonzero_missing_summary(level, 'health', 'qof_coverage')}"
+            ),
+        },
+    ])
     columns = [
-        "domain", "metric", "label", "geography_level",
+        "domain", "metric", "label", "geography_level", "column_role",
         "count_column", "count_unit", "count_definition",
         "coverage_population_column", "coverage_population_definition",
-        "rate_column", "rate_unit", "first_year", "last_year", "source",
+        "rate_column", "rate_unit", "indicator_column", "indicator_unit",
+        "indicator_definition", "first_year", "last_year", "source",
         "availability_and_adjustments",
     ]
     return pd.DataFrame(rows)[columns]
@@ -960,26 +1297,32 @@ for lv in LEVELS:
         if not frames:
             continue
         tidy = pd.concat(frames, ignore_index=True)
+        member_name = f"adi-{lv}-{dom}.csv"
         # code, name, year first; drop the dropped-QOF columns entirely rather
         # than shipping empty ones.
+        indicator_columns: tuple[str, ...] = ()
         if dom == "health":
             drop_cols = [c for c in tidy.columns
                          if any(c.startswith(f"{code}_") for code in DROP_HEALTH)]
             tidy = tidy.drop(columns=drop_cols)
+            _validate_health_quality_columns(tidy, member_name)
+            tidy = tidy.drop(columns=list(HEALTH_SUPPORT_COLUMNS))
+            indicator_columns = HEALTH_QUALITY_COLUMNS
         lead = [c for c in ("code", "name", "year", "pop") if c in tidy.columns]
         count_cols = _metric_count_columns(tidy.columns)
         metric_cols = [
             column for count_col in count_cols
             for column in (count_col, f"{count_col}{COUNT_POP_SUFFIX}", f"{count_col}_rate")
         ]
-        ordered = lead + metric_cols
+        ordered = lead + list(indicator_columns) + metric_cols
         leftovers = [c for c in tidy.columns if c not in ordered]
         if leftovers:
             raise ValueError(f"Unclassified columns in adi-{lv}-{dom}.csv: {leftovers}")
         tidy = tidy[ordered]
         tidy = tidy.sort_values(["code", "year"], kind="stable")
-        member_name = f"adi-{lv}-{dom}.csv"
-        tidy, max_decimals = _serialise_download_table(tidy, member_name)
+        tidy, max_decimals = _serialise_download_table(
+            tidy, member_name, indicator_columns
+        )
         bundle_max_decimals = max(bundle_max_decimals, max_decimals)
         members[member_name] = tidy.to_csv(index=False)
 
@@ -987,7 +1330,13 @@ for lv in LEVELS:
         continue
     members["README.txt"] = DL_README.format(
         level=lv, level_label=_LEVEL_LABELS[lv], generated=_generated,
-        area_count=len(codes_by_level[lv]), row_count=len(codes_by_level[lv]) * len(YEARS))
+        area_count=len(codes_by_level[lv]), row_count=len(codes_by_level[lv]) * len(YEARS),
+        health_coverage_gaps=_health_coverage_gap_summary(),
+        crime_gap_table=_crime_gap_table(), health_gap_table=_health_gap_table(),
+        ndh_2021_missing=_missing_counts("lsoa", "health", "NDH_afflicted_rate")[2021],
+        dep_2024_missing=_missing_counts("lsoa", "health", "DEP_afflicted_rate")[2024],
+        ost_2015_missing=_missing_counts("lsoa", "health", "OST_afflicted_rate")[2015],
+    )
     members[f"adi-{lv}-data-dictionary.csv"] = _data_dictionary(lv).to_csv(index=False)
     members[f"adi-{lv}-geography.csv"] = _geography_dictionary(lv).to_csv(index=False)
 
@@ -996,15 +1345,20 @@ for lv in LEVELS:
         for name, payload in members.items():
             _write_public_zip_member(z, f"adi-{lv}/{name}", payload)
     size = zip_path.stat().st_size
+    with zipfile.ZipFile(zip_path) as z:
+        extracted_size = sum(info.file_size for info in z.infolist())
     _bundle_index.append({
         "level": lv,
         "label": _LEVEL_LABELS[lv],
         "file": f"downloads/{zip_path.name}",
         "bytes": size,
-        "size": (f"{size/1_000_000:.1f} MB" if size >= 1_000_000 else f"{size/1_000:.0f} KB"),
+        "size": _decimal_size(size),
+        "extracted_bytes": extracted_size,
+        "extracted_size": _binary_size(extracted_size),
     })
     print(
         f"  {lv}: {zip_path.name} ({_bundle_index[-1]['size']}; "
+        f"{_bundle_index[-1]['extracted_size']} extracted; "
         f"counts use at most {bundle_max_decimals} decimals)"
     )
 
