@@ -63,6 +63,7 @@
   <p class="measure">The complete dataset is available as CSV, at every geographic level. The full pipeline (fetch, process and aggregate) is open source and reproducible end to end. All sources are public; no API keys are required.</p>
   <p>
     <a class="btn btn--accent" href="{base}/download">Download the data →</a>
+    <a class="btn btn--ghost" href="{base}/changelog">See what changed →</a>
     <a class="btn btn--ghost" href="https://github.com/Autonomy-Data-Unit/annual-deprivation-index" target="_blank" rel="noopener">Pipeline on GitHub ↗</a>
     <a class="btn btn--ghost" href="{base}/adi-vs-imd">How it complements the IMD →</a>
   </p>

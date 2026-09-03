@@ -1,19 +1,7 @@
 <script>
   import { base } from '$app/paths';
-  import { onMount } from 'svelte';
-
-  let idx = $state(null);
-  let err = $state(null);
-
-  onMount(async () => {
-    try {
-      const r = await fetch(`${base}/data/downloads.json`);
-      if (!r.ok) throw new Error(`${r.status}`);
-      idx = await r.json();
-    } catch (e) {
-      err = e.message;
-    }
-  });
+  let { data } = $props();
+  const idx = $derived(data.index);
 </script>
 
 <svelte:head><title>Download the data · ADI</title></svelte:head>
@@ -26,27 +14,32 @@
     with the same corrections applied — not the raw pipeline output.
   </p>
 
-  {#if err}
-    <p class="muted">Download index unavailable ({err}).</p>
-  {:else if !idx}
-    <p class="muted">Loading…</p>
-  {:else}
-    <p class="muted small">Covering {idx.years[0]}–{idx.years[1]}. Generated {idx.generated}.</p>
-    <ul class="dl">
-      {#each idx.bundles as b}
-        <li>
-          <a class="dl__link" href="{base}/{b.file}" download>
-            <span class="dl__label">{b.label}</span>
-            <span class="dl__meta">{b.areas.toLocaleString()} {b.areas === 1 ? 'area' : 'areas'} · ZIP, {b.size}{b.level === 'lsoa' ? ' · about 350 MiB extracted' : ''}</span>
-          </a>
-        </li>
-      {/each}
-    </ul>
-    <p class="muted small">
-      Each archive holds one CSV per domain (employment, crime, health), long by year, plus a README
-      describing the columns and the known gaps.
-    </p>
-  {/if}
+  <p class="muted small">
+    Covering {idx.years[0]} to {idx.years[1]}. Dataset release <code class="release-id">{idx.release}</code>;
+    files generated {idx.generated}.
+  </p>
+  <ul class="dl">
+    {#each idx.bundles as b}
+      <li class="dl__item">
+        <div class="dl__copy">
+          <span class="dl__label">{b.label}</span>
+          <span class="dl__meta">
+            {b.areas.toLocaleString()} {b.areas === 1 ? 'area' : 'areas'} · ZIP, {b.size} compressed ·
+            {b.extracted_size} extracted
+          </span>
+          <span class="dl__release">Release <code class="release-id">{idx.release}</code></span>
+        </div>
+        <div class="dl__actions">
+          <a class="btn btn--accent" href="{base}/{b.file}" download aria-label="Download {b.label} data, release {idx.release}">Download ↓</a>
+          <a class="btn btn--ghost" href="{base}/changelog">What changed?</a>
+        </div>
+      </li>
+    {/each}
+  </ul>
+  <p class="muted small">
+    Each archive holds one CSV per domain (employment, crime, health), long by year, plus a README
+    describing the columns and the known gaps.
+  </p>
 
   <h2>Before you use it</h2>
   <ul class="measure">
@@ -83,16 +76,17 @@
   .measure-wide { max-width: 820px; }
   h2 { margin-top: var(--sp-6); }
   .dl { list-style: none; padding: 0; margin: var(--sp-3) 0; display: grid; gap: var(--sp-2); }
-  .dl__link {
-    display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3);
+  .dl__item {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3);
     padding: var(--sp-3); border: 1px solid var(--grey-3); border-radius: 6px;
-    text-decoration: none; color: inherit;
   }
-  .dl__link:hover { border-color: var(--grey-1); }
+  .dl__copy { display: grid; gap: 4px; min-width: 0; }
   .dl__label { font-weight: 600; }
-  .dl__meta { font-size: var(--fs-0); color: var(--grey-1); white-space: nowrap; }
-  @media (max-width: 560px) {
-    .dl__link { flex-direction: column; gap: var(--sp-1); }
-    .dl__meta { white-space: normal; }
+  .dl__meta, .dl__release { font-size: var(--fs-0); color: var(--grey-1); }
+  .release-id { white-space: nowrap; }
+  .dl__actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+  .dl__actions .btn { white-space: nowrap; }
+  @media (max-width: 680px) {
+    .dl__item { grid-template-columns: 1fr; }
   }
 </style>
