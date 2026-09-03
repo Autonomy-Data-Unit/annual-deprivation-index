@@ -33,11 +33,15 @@
     <noscript>
       <div role="note" aria-label="JavaScript notice" style="max-width: 72rem; margin: 1rem auto; padding: 1rem 1.5rem; border: 2px solid #a87900; font: 1rem/1.6 system-ui, sans-serif; color: #1e1e2e">
         <p><strong>JavaScript is unavailable.</strong> Interactive maps and controls need JavaScript. Direct data downloads remain available:</p>
+        <!-- Deliberately links to the download PAGE, not to individual bundles.
+             Bundle filenames carry the dataset release (adi-lsoa-2026-09-03.zip)
+             and their sizes change every release, so hardcoding either here goes
+             stale silently — it already had, pointing at unversioned names and
+             "88.3 MB" after the bundles grew to 128 MB. /download is prerendered
+             with the current filenames and sizes, so it works without JavaScript. -->
         <ul>
-          <li><a href="%sveltekit.assets%/downloads/adi-england.zip">England CSV bundle</a></li>
-          <li><a href="%sveltekit.assets%/downloads/adi-region.zip">Region CSV bundle</a></li>
-          <li><a href="%sveltekit.assets%/downloads/adi-lad.zip">Local-authority CSV bundle</a></li>
-          <li><a href="%sveltekit.assets%/downloads/adi-lsoa.zip">Neighbourhood (LSOA) CSV bundle</a> — 88.3 MB ZIP</li>
+          <li><a href="%sveltekit.assets%/download/">All CSV bundles, by area level, with sizes and the current release identifier</a></li>
+          <li><a href="%sveltekit.assets%/changelog/">What changed in this release</a></li>
         </ul>
         <p><a href="%sveltekit.assets%/annual-deprivation-index-paper.pdf">Read the methodology paper (PDF)</a> or <a href="https://github.com/Autonomy-Data-Unit/annual-deprivation-index">inspect the open-source pipeline</a>.</p>
       </div>
